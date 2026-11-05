@@ -13,6 +13,9 @@ plugins {
   alias(libs.plugins.detekt)
 }
 
+// The release workflow passes the tag's version and the upload key; local builds keep the defaults and the debug key.
+val releaseKeystore = providers.environmentVariable("REXC_KEYSTORE").orNull
+
 android {
   namespace = "dev.namnv.rexc"
   compileSdk = 37
@@ -21,9 +24,20 @@ android {
     applicationId = "dev.namnv.rexc"
     minSdk = 28
     targetSdk = 36
-    versionCode = 1
-    versionName = "0.1.0"
+    versionCode = providers.gradleProperty("rexc.versionCode").map(String::toInt).getOrElse(1)
+    versionName = providers.gradleProperty("rexc.versionName").getOrElse("0.1.0")
     ndk { abiFilters += listOf("arm64-v8a") }
+  }
+
+  signingConfigs {
+    if (releaseKeystore != null) {
+      create("release") {
+        storeFile = file(releaseKeystore)
+        storePassword = providers.environmentVariable("REXC_KEYSTORE_PASSWORD").get()
+        keyAlias = providers.environmentVariable("REXC_KEY_ALIAS").get()
+        keyPassword = providers.environmentVariable("REXC_KEY_PASSWORD").get()
+      }
+    }
   }
 
   buildTypes {
@@ -31,7 +45,7 @@ android {
       isMinifyEnabled = true
       isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      signingConfig = signingConfigs.getByName("debug")
+      signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
     }
   }
 

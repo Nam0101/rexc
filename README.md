@@ -55,6 +55,8 @@ Rust for Android needs zig (libghostty) and the NDK: `scripts/build-android.sh` 
 
 Quality gates: `cargo test --workspace`, `./gradlew spotlessCheck detekt testDebugUnitTest`.
 
+Releases: pushing a `vX.Y.Z` tag runs `.github/workflows/release.yml`, which builds the arm64 APK signed with the upload key from the repo secrets (`REXC_KEYSTORE_BASE64`, `REXC_KEYSTORE_PASSWORD`, `REXC_KEY_ALIAS`, `REXC_KEY_PASSWORD`) and publishes it as a GitHub Release. Run the workflow by hand to get the APK as a run artifact without a release.
+
 ## Adding a server from the desktop
 
 On the machine that runs Rex, print a code with the address the phone should use (tailnet name or `host:port`), then tap the scan icon in the app's "Add server" sheet:
