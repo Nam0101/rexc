@@ -1,0 +1,104 @@
+package dev.namnv.rexc
+
+import android.Manifest
+import android.content.Intent
+import android.os.Build
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
+import androidx.navigation3.runtime.NavKey
+import androidx.navigation3.runtime.entryProvider
+import androidx.navigation3.runtime.rememberNavBackStack
+import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
+import androidx.navigation3.ui.NavDisplay
+import dagger.hilt.android.AndroidEntryPoint
+import dev.namnv.rexc.core.ui.theme.RexcTheme
+import dev.namnv.rexc.data.EngineRepository
+import dev.namnv.rexc.navigation.Home
+import dev.namnv.rexc.navigation.Terminal
+import dev.namnv.rexc.presentation.home.HomeRoute
+import dev.namnv.rexc.presentation.terminal.TerminalRoute
+import javax.inject.Inject
+
+// Screens slide in from a quarter of the width; the rest is a fade.
+private const val NAV_SLIDE_DIVISOR = 4
+
+@AndroidEntryPoint
+class MainActivity : ComponentActivity() {
+  @Inject lateinit var engine: EngineRepository
+
+  /** A terminal a notification asked for; consumed by the nav host once. */
+  private var pendingTerminal by mutableStateOf<Terminal?>(null)
+
+  override fun onCreate(savedInstanceState: Bundle?) {
+    enableEdgeToEdge()
+    super.onCreate(savedInstanceState)
+    readIntent(intent)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+      }.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+    engine.connectAll()
+    setContent {
+      RexcTheme {
+        val backStack = rememberNavBackStack(Home)
+        pendingTerminal?.let { target ->
+          pendingTerminal = null
+          if (backStack.lastOrNull() != target) {
+            if (backStack.lastOrNull() is Terminal) backStack.removeLastOrNull()
+            backStack.add(target)
+          }
+        }
+        NavDisplay(
+          backStack = backStack,
+          modifier = Modifier.fillMaxSize(),
+          entryDecorators = listOf(
+            rememberSaveableStateHolderNavEntryDecorator<NavKey>(),
+            rememberViewModelStoreNavEntryDecorator(),
+          ),
+          transitionSpec = { slideInHorizontally { it / NAV_SLIDE_DIVISOR } + fadeIn() togetherWith fadeOut() },
+          popTransitionSpec = { fadeIn() togetherWith slideOutHorizontally { it / NAV_SLIDE_DIVISOR } + fadeOut() },
+          onBack = { if (backStack.size > 1) backStack.removeLastOrNull() else finish() },
+          entryProvider = entryProvider {
+            entry<Home> {
+              HomeRoute(onOpenTerminal = { backStack.add(it) })
+            }
+            entry<Terminal> { key ->
+              TerminalRoute(key = key, onBack = { backStack.removeLastOrNull() })
+            }
+          },
+        )
+      }
+    }
+  }
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    readIntent(intent)
+  }
+
+  private fun readIntent(intent: Intent?) {
+    val host = intent?.getStringExtra(EXTRA_HOST) ?: return
+    val session = intent.getStringExtra(EXTRA_SESSION) ?: return
+    pendingTerminal = Terminal(host, session, intent.getStringExtra(EXTRA_BLOCK))
+  }
+
+  companion object {
+    const val EXTRA_HOST = "host_id"
+    const val EXTRA_SESSION = "session_id"
+    const val EXTRA_BLOCK = "block_id"
+  }
+}

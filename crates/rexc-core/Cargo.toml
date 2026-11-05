@@ -1,0 +1,19 @@
+[package]
+name = "rexc-core"
+description = "The rexc engine: hosts, live session state, terminals, ownership, input, alerts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+rexc-proto.workspace = true
+rexc-client.workspace = true
+rexc-term.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+parking_lot = "0.12"

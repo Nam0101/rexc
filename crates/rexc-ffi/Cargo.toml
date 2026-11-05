@@ -1,0 +1,28 @@
+[package]
+name = "rexc-ffi"
+description = "Kotlin bindings for the rexc engine (UniFFI)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "rexc_ffi"
+crate-type = ["lib", "cdylib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[features]
+bindgen = ["uniffi/cli"]
+
+[dependencies]
+rexc-core.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi"] }
+uniffi = "0.32"
+
+[target.'cfg(target_os = "android")'.dependencies]
+tracing-android = "0.2"

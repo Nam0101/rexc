@@ -1,0 +1,7 @@
+# mirako.toml — per-project settings (overrides ~/.config/mirako/config.toml)
+# host = "m4"
+# remote_folder = "~/mirako"
+# fallback = true
+
+# Free the remote's disk after every pull at the price of a clean build next time:
+# gc_after_pull = ["build/intermediates", "build/tmp", "build/kotlin", "build/kspCaches"]

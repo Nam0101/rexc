@@ -1,0 +1,188 @@
+package dev.namnv.rexc.presentation.home
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.namnv.rexc.base.EventChannel
+import dev.namnv.rexc.base.HasEventFlow
+import dev.namnv.rexc.core.dispatcher.WHILE_UI_SUBSCRIBED
+import dev.namnv.rexc.data.EngineRepository
+import dev.namnv.rexc.navigation.Terminal
+import javax.inject.Inject
+import kotlinx.collections.immutable.toImmutableList
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import uniffi.rexc_ffi.InboxItem
+import uniffi.rexc_ffi.RexcException
+
+private const val PREVIEW_LINES = 4u
+
+/** Owns the home list: hosts, their sessions, the inbox, and the add/edit host sheet. */
+@HiltViewModel
+class HomeViewModel @Inject constructor(private val repo: EngineRepository) :
+  ViewModel(),
+  HasEventFlow<HomeEffect> {
+  private data class Local(
+    val editor: HostEditor? = null,
+    val busyHostId: String? = null,
+    /** Block ids with a quick reply in flight. */
+    val sending: Set<String> = emptySet(),
+  )
+
+  private data class Preview(val stamp: String, val text: String?)
+
+  private val local = MutableStateFlow(Local())
+
+  /** Screen previews by block id, each tied to the status it was fetched for. */
+  private val previews = MutableStateFlow<Map<String, Preview>>(emptyMap())
+  private val effects = EventChannel<HomeEffect>("HomeEffect")
+  override val eventFlow: Flow<HomeEffect> = effects.eventFlow
+
+  val uiState: StateFlow<HomeUiState> = combine(repo.hosts, repo.inbox, local, previews) { hosts, inbox, l, p ->
+    HomeUiState(
+      hosts = hosts.map { it.toUi() }.toImmutableList(),
+      inbox = inbox.map {
+        it.toUi().copy(preview = p[it.blockId]?.text, sending = it.blockId in l.sending)
+      }.toImmutableList(),
+      editor = l.editor,
+      busyHostId = l.busyHostId,
+    )
+  }.stateIn(viewModelScope, WHILE_UI_SUBSCRIBED, HomeUiState())
+
+  init {
+    viewModelScope.launch { repo.inbox.collect { items -> refreshPreviews(items) } }
+  }
+
+  /** Fetches a preview for every inbox item whose status moved on; drops the ones that left. */
+  private fun refreshPreviews(items: List<InboxItem>) {
+    val wanted = items.associateBy { it.blockId }
+    previews.update { old -> old.filterKeys { it in wanted } }
+    for (item in items) {
+      val stamp = item.previewStamp()
+      if (previews.value[item.blockId]?.stamp == stamp) continue
+      previews.update { it + (item.blockId to Preview(stamp, it[item.blockId]?.text)) }
+      viewModelScope.launch {
+        val text = try {
+          repo.call { blockPreview(item.hostId, item.sessionId, item.blockId, PREVIEW_LINES) }
+        } catch (e: RexcException) {
+          repo.log("preview ${item.blockId}", e)
+          null
+        }
+        previews.update { p ->
+          if (p[item.blockId]?.stamp ==
+            stamp
+          ) {
+            p + (item.blockId to Preview(stamp, text ?: p[item.blockId]?.text))
+          } else {
+            p
+          }
+        }
+      }
+    }
+  }
+
+  fun onEvent(event: HomeUiEvent) {
+    when (event) {
+      HomeUiEvent.AddHostClicked -> local.update { it.copy(editor = HostEditor(null, "", "")) }
+      is HomeUiEvent.EditHostClicked -> viewModelScope.launch {
+        val record = repo.call { hosts().firstOrNull { it.hostId == event.hostId } } ?: return@launch
+        local.update {
+          it.copy(editor = HostEditor(record.hostId, record.name, record.address, record.backgroundAlerts))
+        }
+      }
+      is HomeUiEvent.EditorChanged -> local.update {
+        it.copy(
+          editor = it.editor?.copy(
+            name = event.name,
+            address = event.address,
+            backgroundAlerts = event.backgroundAlerts,
+            error = null,
+          ),
+        )
+      }
+      HomeUiEvent.SaveHost -> saveHost()
+      HomeUiEvent.DismissEditor -> local.update { it.copy(editor = null) }
+      is HomeUiEvent.RemoveHost -> run { repo.call { removeHost(event.hostId) } }
+      is HomeUiEvent.Connect -> run { repo.call { connect(event.hostId) } }
+      is HomeUiEvent.Disconnect -> run { repo.call { disconnect(event.hostId) } }
+      is HomeUiEvent.OpenSession -> effects.trySend(HomeEffect.OpenTerminal(Terminal(event.hostId, event.sessionId)))
+      is HomeUiEvent.OpenInbox -> effects.trySend(
+        HomeEffect.OpenTerminal(Terminal(event.item.hostId, event.item.sessionId, event.item.blockId)),
+      )
+      is HomeUiEvent.NewSession -> newSession(event.hostId)
+      is HomeUiEvent.QuickReply -> quickReply(event.item, event.text)
+    }
+  }
+
+  private fun quickReply(item: InboxUi, text: String) {
+    if (item.blockId in local.value.sending) return
+    local.update { it.copy(sending = it.sending + item.blockId) }
+    viewModelScope.launch {
+      try {
+        repo.call { quickReply(item.hostId, item.sessionId, item.blockId, text) }
+      } catch (e: RexcException) {
+        effects.trySend(HomeEffect.Message(e.message ?: "Could not send"))
+      } finally {
+        local.update { it.copy(sending = it.sending - item.blockId) }
+      }
+    }
+  }
+
+  private fun saveHost() {
+    val editor = local.value.editor ?: return
+    val name = editor.name.trim().ifEmpty {
+      editor.address.trim().substringAfter("://").substringBefore('/').substringBefore(':')
+    }
+    if (editor.address.isBlank()) {
+      local.update { it.copy(editor = editor.copy(error = "Enter the server address")) }
+      return
+    }
+    local.update { it.copy(editor = editor.copy(saving = true, error = null)) }
+    viewModelScope.launch {
+      try {
+        val id = repo.call {
+          if (editor.hostId == null) {
+            addHost(name, editor.address.trim())
+          } else {
+            updateHost(editor.hostId, name, editor.address.trim(), editor.backgroundAlerts)
+            editor.hostId
+          }
+        }
+        repo.call { connect(id) }
+        local.update { it.copy(editor = null) }
+      } catch (e: RexcException) {
+        local.update { it.copy(editor = editor.copy(saving = false, error = e.message ?: "Could not save")) }
+      }
+    }
+  }
+
+  private fun newSession(hostId: String) {
+    if (local.value.busyHostId != null) return
+    local.update { it.copy(busyHostId = hostId) }
+    viewModelScope.launch {
+      try {
+        val sessionId = repo.call { newSession(hostId, null) }
+        effects.trySend(HomeEffect.OpenTerminal(Terminal(hostId, sessionId)))
+      } catch (e: RexcException) {
+        effects.trySend(HomeEffect.Message(e.message ?: "Could not create a session"))
+      } finally {
+        local.update { it.copy(busyHostId = null) }
+      }
+    }
+  }
+
+  private fun run(block: suspend () -> Unit) {
+    viewModelScope.launch {
+      try {
+        block()
+      } catch (e: RexcException) {
+        effects.trySend(HomeEffect.Message(e.message ?: "Something went wrong"))
+      }
+    }
+  }
+}

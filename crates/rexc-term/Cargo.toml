@@ -1,0 +1,11 @@
+[package]
+name = "rexc-term"
+description = "Terminal state on libghostty-vt: snapshot restore, VT, frames as style runs, selection, scrollback"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+rexc-proto.workspace = true
+libghostty-vt = { git = "https://github.com/Uzaaft/libghostty-rs", rev = "575ed6b8ceb79ffaf247ecf7e34333876b0d5be4", default-features = false }
