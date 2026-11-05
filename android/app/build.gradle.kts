@@ -8,6 +8,7 @@ plugins {
   alias(libs.plugins.kotlin.serialization)
   alias(libs.plugins.dagger.hilt.android)
   alias(libs.plugins.ksp)
+  alias(libs.plugins.baselineprofile)
   alias(libs.plugins.spotless)
   alias(libs.plugins.detekt)
 }
@@ -122,6 +123,8 @@ dependencies {
   implementation(libs.dagger.hilt.android)
   ksp(libs.dagger.hilt.compiler)
   implementation(libs.timber)
+  implementation(libs.androidx.profileinstaller)
+  baselineProfile(project(":baselineprofile"))
   implementation("${libs.jna.get()}@aar")
 
   testImplementation(libs.junit)

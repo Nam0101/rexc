@@ -47,7 +47,7 @@ async fn main() {
         "reply" if args.len() >= 5 => {
             let (addr, s, b, t) = (addr.clone(), args[2].clone(), args[3].clone(), args[4].clone());
             // No connect first: the engine must bring the host up for this one call, as from a notification.
-            tokio::task::spawn_blocking(move || with_engine(&addr, false, |e, h| Ok(e.quick_reply(h, &s, &b, &t)?)).map_err(|e| e.to_string())).await.unwrap_or_else(|e| Err(e.to_string())).map_err(Into::into)
+            tokio::task::spawn_blocking(move || with_engine(&addr, false, |e, h| Ok(e.quick_reply(h, &s, &b, &t, true)?)).map_err(|e| e.to_string())).await.unwrap_or_else(|e| Err(e.to_string())).map_err(Into::into)
         }
         _ => {
             eprintln!("usage: rexc ls|watch [ADDR] | rexc stream|screen|take|preview ADDR SESSION BLOCK | rexc reply ADDR SESSION BLOCK TEXT");

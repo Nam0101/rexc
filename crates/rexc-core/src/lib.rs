@@ -212,6 +212,14 @@ impl Engine {
         Ok(())
     }
 
+    /// The device's network changed: hosts waiting out a backoff retry now, and connected
+    /// ones check their socket is alive (wifi can drop without a FIN).
+    pub fn network_changed(&self) {
+        for h in self.hosts.lock().values() {
+            h.send(HostCmd::Probe);
+        }
+    }
+
     pub fn connect_all(&self) {
         for h in self.hosts.lock().values() {
             h.send(HostCmd::Connect);
@@ -273,16 +281,16 @@ impl Engine {
         Ok(result)
     }
 
-    /// Type `text` and Enter into a pane without opening it, e.g. "y" from a
+    /// Type `text` (and Enter when `enter`) into a pane without opening it, e.g. "y" from a
     /// notification. Connects first when the host is down and, while the app is
     /// in the background, lets that connection go again afterwards.
-    pub fn quick_reply(&self, host_id: &str, session_id: &str, block_id: &str, text: &str) -> Result<()> {
+    pub fn quick_reply(&self, host_id: &str, session_id: &str, block_id: &str, text: &str, enter: bool) -> Result<()> {
         let h = self.host(host_id)?;
         let was_up = h.control().is_some();
         if !was_up {
             h.send(HostCmd::Connect);
         }
-        let data = format!("{}\r", text.trim_end_matches(['\r', '\n']));
+        let data = reply_data(text, enter);
         let result = self.block_on(async {
             let control = wait_for_control(&h, QUICK_REPLY_TIMEOUT).await?;
             control.call_block(session_id, block_id, "write", json!({"data": data})).await?;
@@ -671,6 +679,12 @@ async fn wait_for_control(h: &HostHandle, timeout: Duration) -> Result<rexc_clie
     }
 }
 
+/// What a quick reply types: the text without trailing newlines, then Enter if asked.
+fn reply_data(text: &str, enter: bool) -> String {
+    let text = text.trim_end_matches(['\r', '\n']);
+    if enter { format!("{text}\r") } else { text.to_owned() }
+}
+
 /// The last `n` non-blank lines, joined.
 fn tail_lines(text: &str, n: usize) -> String {
     let lines: Vec<&str> = text.lines().map(str::trim_end).filter(|l| !l.is_empty()).collect();
@@ -686,6 +700,13 @@ mod tests {
         assert_eq!(tail_lines("a\n\nb  \nc\n\n", 2), "b\nc");
         assert_eq!(tail_lines("only", 4), "only");
         assert_eq!(tail_lines("\n \n", 4), "");
+    }
+
+    #[test]
+    fn reply_data_ends_with_enter_only_when_asked() {
+        assert_eq!(reply_data("y\n", true), "y\r");
+        assert_eq!(reply_data("y", false), "y");
+        assert_eq!(reply_data("\u{1b}", false), "\u{1b}");
     }
 
     #[test]

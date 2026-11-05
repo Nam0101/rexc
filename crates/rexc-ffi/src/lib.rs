@@ -653,9 +653,15 @@ impl Rexc {
     }
 
     // sessions and layout (each blocks until the server answers; call off the main thread)
-    /// Type `text` and Enter into a pane without opening it; connects first if needed.
-    pub fn quick_reply(&self, host_id: String, session_id: String, block_id: String, text: String) -> Result<()> {
-        Ok(self.engine.quick_reply(&host_id, &session_id, &block_id, &text)?)
+    /// Type `text` (and Enter, unless `enter` is false) into a pane without opening it; connects first if needed.
+    #[uniffi::method(default(enter = true))]
+    pub fn quick_reply(&self, host_id: String, session_id: String, block_id: String, text: String, enter: bool) -> Result<()> {
+        Ok(self.engine.quick_reply(&host_id, &session_id, &block_id, &text, enter)?)
+    }
+
+    /// The device's network changed: reconnect now or verify the live connections.
+    pub fn network_changed(&self) {
+        self.engine.network_changed();
     }
 
     /// The last `lines` non-blank lines of a pane's screen, as plain text.
