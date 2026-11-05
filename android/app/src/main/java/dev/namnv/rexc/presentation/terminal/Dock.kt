@@ -1,5 +1,13 @@
 package dev.namnv.rexc.presentation.terminal
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -29,6 +37,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -42,6 +51,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerInputScope
@@ -54,7 +64,9 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.namnv.rexc.core.ui.theme.Colors
 import dev.namnv.rexc.core.ui.theme.MonoFamily
+import dev.namnv.rexc.core.ui.theme.Motion
 import dev.namnv.rexc.core.ui.theme.Space
+import dev.namnv.rexc.presentation.common.pressScale
 import dev.namnv.rexc.data.DockAction
 import dev.namnv.rexc.data.DockItem
 import kotlin.math.abs
@@ -171,14 +183,37 @@ private val LocalDockInk = compositionLocalOf { Color.Unspecified }
 private val LocalDockHaptics = compositionLocalOf { true }
 private const val KEY_TINT = 0.1f
 private const val HAIRLINE = 0.08f
+private const val KEY_PRESSED = 0.9f
+private const val LATCH_POP = 1.1f
+private const val MORPH_SCALE = 0.6f
 
-/** A key cap. [modifier] carries the gesture; the cap clips its ripple. */
+/**
+ * A key cap. [modifier] carries the gesture; the cap clips its ripple. It sinks under a
+ * finger, its tint slides between plain and accent, and it pops when it latches.
+ */
 @Composable
 private fun KeyBox(active: Boolean, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
   val ink = LocalDockInk.current
+  val fill by animateColorAsState(
+    if (active) Colors.accent else ink.copy(alpha = KEY_TINT),
+    Motion.move(Motion.QUICK),
+    label = "key",
+  )
+  val latch = remember { Animatable(1f) }
+  LaunchedEffect(active) {
+    if (active) {
+      latch.snapTo(LATCH_POP)
+      latch.animateTo(1f, Motion.touch())
+    }
+  }
   Box(
-    Modifier.height(42.dp).defaultMinSize(minWidth = 44.dp).clip(RoundedCornerShape(12.dp))
-      .background(if (active) Colors.accent else ink.copy(alpha = KEY_TINT))
+    Modifier.pressScale(KEY_PRESSED)
+      .graphicsLayer {
+        scaleX = latch.value
+        scaleY = latch.value
+      }
+      .height(42.dp).defaultMinSize(minWidth = 44.dp).clip(RoundedCornerShape(12.dp))
+      .drawBehind { drawRect(fill) }
       .then(modifier)
       .padding(horizontal = Space.m),
     contentAlignment = Alignment.Center,
@@ -212,10 +247,20 @@ private fun Key(label: String, onLongClick: (() -> Unit)? = null, onClick: () ->
   }
 }
 
+/** An icon key; a new icon grows in as the old one shrinks away (keyboard show/hide). */
 @Composable
 private fun IconKey(icon: ImageVector, description: String, onClick: () -> Unit) {
   KeyBox(active = false, Modifier.combinedClickable(onClick = tap(onClick))) {
-    Icon(icon, contentDescription = description, tint = LocalDockInk.current, modifier = Modifier.size(18.dp))
+    AnimatedContent(
+      targetState = icon,
+      transitionSpec = {
+        (scaleIn(Motion.enter(Motion.STANDARD), MORPH_SCALE) + fadeIn(Motion.enter(Motion.STANDARD)))
+          .togetherWith(scaleOut(Motion.leave(), MORPH_SCALE) + fadeOut(Motion.leave()))
+      },
+      label = "iconKey",
+    ) { shown ->
+      Icon(shown, contentDescription = description, tint = LocalDockInk.current, modifier = Modifier.size(18.dp))
+    }
   }
 }
 

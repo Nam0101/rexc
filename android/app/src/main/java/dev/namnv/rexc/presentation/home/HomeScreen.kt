@@ -1,6 +1,10 @@
 package dev.namnv.rexc.presentation.home
 
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.keyframes
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
@@ -21,7 +25,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -53,14 +57,19 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import dev.namnv.rexc.core.ui.theme.Colors
 import dev.namnv.rexc.core.ui.theme.MonoFamily
+import dev.namnv.rexc.core.ui.theme.Motion
 import dev.namnv.rexc.core.ui.theme.Radius
 import dev.namnv.rexc.core.ui.theme.Space
 import dev.namnv.rexc.presentation.common.LocalSettings
+import dev.namnv.rexc.presentation.common.appear
+import dev.namnv.rexc.presentation.common.pressScale
+import dev.namnv.rexc.presentation.common.rememberScreenStart
 import kotlinx.coroutines.delay
 
 /** How long the dragged order stays on screen waiting for the engine to confirm it. */
@@ -68,6 +77,9 @@ private const val SETTLE_MS = 1_000L
 private const val DRAG_SCALE = 1.02f
 private const val DRAG_SHADOW_PX = 24f
 private const val DRAG_Z = 1f
+private const val CARET_PERIOD_MS = 1_060
+private const val ICON_PRESS = 0.85f
+private val caretSize = DpSize(11.dp, 24.dp)
 
 /** The home list: what needs you, then every host with its sessions. Stateless. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -81,6 +93,7 @@ fun HomeScreen(
 ) {
   var dialog by remember { mutableStateOf<SessionDialog?>(null) }
   val listState = rememberLazyListState()
+  val screenStart = rememberScreenStart()
   val haptics = LocalHapticFeedback.current
   val hapticsOn = LocalSettings.current.haptics
   val reorder = remember(listState) {
@@ -117,24 +130,55 @@ fun HomeScreen(
         contentPadding = PaddingValues(start = Space.l, end = Space.l, top = top + Space.s, bottom = bottom + Space.xl),
         verticalArrangement = Arrangement.spacedBy(Space.m),
       ) {
-        item(key = "header") { Header(onAdd = { onEvent(HomeUiEvent.AddHostClicked) }, onOpenSettings) }
-        batteryItem(state.batteryHint, onEvent)
-        if (state.inbox.isNotEmpty()) {
-          item(key = "needs-you") { NeedsYou(state.inbox, onEvent) }
-        }
-        if (hosts.isEmpty()) {
-          item(key = "empty") { EmptyState { onEvent(HomeUiEvent.AddHostClicked) } }
-        }
-        items(hosts, key = { it.id }) { host ->
-          DraggableHostCard(host, state.busyHostId == host.id, reorder, { currentHosts.map { it.id } }, onEvent) {
-            dialog = it
-          }
+        homeItems(state, hosts, reorder, { currentHosts.map { it.id } }, screenStart, onEvent, onOpenSettings) {
+          dialog = it
         }
       }
     }
   }
   state.editor?.let { editor -> HostEditorSheet(editor, onEvent) }
   SessionDialogs(dialog, onDismiss = { dialog = null }, onEvent = onEvent)
+}
+
+/**
+ * The list body: header, the battery hint, what needs you, then the hosts in [hosts] order.
+ * Items rise in one after another when the screen opens; later changes slide rows into place.
+ */
+private fun LazyListScope.homeItems(
+  state: HomeUiState,
+  hosts: List<HostUi>,
+  reorder: HostReorderState,
+  currentIds: () -> List<String>,
+  screenStart: Long,
+  onEvent: (HomeUiEvent) -> Unit,
+  onOpenSettings: () -> Unit,
+  onSessionDialog: (SessionDialog) -> Unit,
+) {
+  var slot = 0
+  item(key = "header") {
+    Header(onAdd = { onEvent(HomeUiEvent.AddHostClicked) }, onOpenSettings, Modifier.appear(0, screenStart))
+  }
+  batteryItem(state.batteryHint, onEvent)
+  if (state.batteryHint) slot++
+  if (state.inbox.isNotEmpty()) {
+    val index = ++slot
+    item(key = "needs-you") { NeedsYou(state.inbox, onEvent, settleInPlace().appear(index, screenStart)) }
+  }
+  if (hosts.isEmpty()) {
+    item(key = "empty") { EmptyState({ onEvent(HomeUiEvent.AddHostClicked) }, Modifier.appear(1, screenStart)) }
+  }
+  val firstHost = slot + 1
+  itemsIndexed(hosts, key = { _, host -> host.id }) { i, host ->
+    DraggableHostCard(
+      host = host,
+      busy = state.busyHostId == host.id,
+      reorder = reorder,
+      currentIds = currentIds,
+      onEvent = onEvent,
+      modifier = Modifier.appear(firstHost + i, screenStart),
+      onSessionDialog = onSessionDialog,
+    )
+  }
 }
 
 /** The battery-optimisation nudge, only while background alerts could still be frozen. */
@@ -156,6 +200,7 @@ private fun LazyItemScope.DraggableHostCard(
   reorder: HostReorderState,
   currentIds: () -> List<String>,
   onEvent: (HomeUiEvent) -> Unit,
+  modifier: Modifier,
   onSessionDialog: (SessionDialog) -> Unit,
 ) {
   val dragging = reorder.dragging == host.id
@@ -168,7 +213,7 @@ private fun LazyItemScope.DraggableHostCard(
       shape = RoundedCornerShape(Radius.card)
     }
   } else {
-    Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null, placementSpec = tween())
+    settleInPlace()
   }
   val handle = Modifier.pointerInput(host.id) {
     detectDragGesturesAfterLongPress(
@@ -181,24 +226,59 @@ private fun LazyItemScope.DraggableHostCard(
       onDragCancel = reorder::end,
     )
   }
-  HostCard(host, busy, onEvent, onSessionDialog, dragHandle = handle, modifier = lifted)
+  HostCard(host, busy, onEvent, onSessionDialog, dragHandle = handle, modifier = modifier.then(lifted))
 }
 
+/** A list item that fades in, fades out, and springs to its new place when the list around it changes. */
+private fun LazyItemScope.settleInPlace(): Modifier = Modifier.animateItem(
+  fadeInSpec = Motion.enter(),
+  fadeOutSpec = Motion.leave(),
+  placementSpec = Motion.settle(),
+)
+
 @Composable
-private fun Header(onAdd: () -> Unit, onOpenSettings: () -> Unit) {
-  Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-    Text("rexc", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Colors.ink, modifier = Modifier.weight(1f))
-    IconButton(onClick = onOpenSettings) {
+private fun Header(onAdd: () -> Unit, onOpenSettings: () -> Unit, modifier: Modifier = Modifier) {
+  Row(verticalAlignment = Alignment.CenterVertically, modifier = modifier.fillMaxWidth()) {
+    Text("rexc", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Colors.ink)
+    Caret()
+    Spacer(Modifier.weight(1f))
+    IconButton(onClick = onOpenSettings, modifier = Modifier.pressScale(ICON_PRESS)) {
       Icon(Icons.Default.Settings, contentDescription = "Settings", tint = Colors.muted)
     }
-    IconButton(onClick = onAdd) { Icon(Icons.Default.Add, contentDescription = "Add server", tint = Colors.accent) }
+    IconButton(onClick = onAdd, modifier = Modifier.pressScale(ICON_PRESS)) {
+      Icon(Icons.Default.Add, contentDescription = "Add server", tint = Colors.accent)
+    }
   }
+}
+
+/** The block cursor after the name, blinking at a terminal's pace: on half the time, off the other. */
+@Composable
+private fun Caret() {
+  val blink by rememberInfiniteTransition(label = "caret").animateFloat(
+    initialValue = 1f,
+    targetValue = 0f,
+    animationSpec = infiniteRepeatable(
+      keyframes {
+        durationMillis = CARET_PERIOD_MS
+        1f at 0
+        1f at CARET_PERIOD_MS / 2 - 1
+        0f at CARET_PERIOD_MS / 2
+        0f at CARET_PERIOD_MS - 1
+      },
+      RepeatMode.Restart,
+    ),
+    label = "caret",
+  )
+  Box(
+    Modifier.padding(start = 3.dp, top = 5.dp).size(caretSize).graphicsLayer { alpha = blink }
+      .background(Colors.accent),
+  )
 }
 
 /** The programs waiting on you, grouped in one card above the hosts. */
 @Composable
-private fun NeedsYou(items: List<InboxUi>, onEvent: (HomeUiEvent) -> Unit) {
-  Column {
+private fun NeedsYou(items: List<InboxUi>, onEvent: (HomeUiEvent) -> Unit, modifier: Modifier = Modifier) {
+  Column(modifier) {
     SectionTitle("Needs you")
     Spacer(Modifier.height(Space.s))
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.card)).background(Colors.surface)) {
@@ -223,9 +303,9 @@ private fun SectionTitle(text: String) {
 
 /** First run: a terminal prompt badge, what to type, and the one button that matters. */
 @Composable
-private fun EmptyState(onAdd: () -> Unit) {
+private fun EmptyState(onAdd: () -> Unit, modifier: Modifier = Modifier) {
   Column(
-    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.card)).background(Colors.surface)
+    modifier = modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.card)).background(Colors.surface)
       .padding(Space.xl),
     horizontalAlignment = Alignment.CenterHorizontally,
   ) {

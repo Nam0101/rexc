@@ -1,7 +1,18 @@
 package dev.namnv.rexc.presentation.home
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -49,15 +60,21 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.namnv.rexc.core.ui.theme.Colors
+import dev.namnv.rexc.core.ui.theme.Motion
 import dev.namnv.rexc.core.ui.theme.Radius
 import dev.namnv.rexc.core.ui.theme.Space
 import dev.namnv.rexc.navigation.Terminal
+import dev.namnv.rexc.presentation.common.AgentBadge
+import dev.namnv.rexc.presentation.common.LiveDot
 import dev.namnv.rexc.presentation.common.MenuEntry
+import dev.namnv.rexc.presentation.common.pressScale
 import dev.namnv.rexc.presentation.common.sharedBoundsFor
 import uniffi.rexc_ffi.HostStatus
 import uniffi.rexc_ffi.ProgramState
 
 private const val COLLAPSED_CHEVRON_DEGREES = -90f
+private const val ICON_MORPH_SCALE = 0.6f
+private val badgeSize = 28.dp
 
 /**
  * One server: header (tap folds it, long press drags it), its sessions, and a way to start another.
@@ -74,7 +91,12 @@ internal fun HostCard(
 ) {
   Column(modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.card)).background(Colors.surface)) {
     HostHeader(host, onEvent, dragHandle)
-    AnimatedVisibility(visible = !host.collapsed) {
+    // Unfolds from under the header; folding is quicker, as leaving should be.
+    AnimatedVisibility(
+      visible = !host.collapsed,
+      enter = expandVertically(Motion.enter(), expandFrom = Alignment.Top) + fadeIn(Motion.enter()),
+      exit = shrinkVertically(Motion.leave(Motion.STANDARD), shrinkTowards = Alignment.Top) + fadeOut(Motion.leave()),
+    ) {
       Column {
         HostBody(host, onEvent, onSessionDialog)
         if (host.status == HostStatus.CONNECTED) {
@@ -87,13 +109,18 @@ internal fun HostCard(
 
 @Composable
 private fun HostHeader(host: HostUi, onEvent: (HomeUiEvent) -> Unit, dragHandle: Modifier) {
-  val chevron by animateFloatAsState(if (host.collapsed) COLLAPSED_CHEVRON_DEGREES else 0f, label = "chevron")
+  val chevron by animateFloatAsState(
+    if (host.collapsed) COLLAPSED_CHEVRON_DEGREES else 0f,
+    animationSpec = Motion.settle(),
+    label = "chevron",
+  )
+  val dot by animateColorAsState(hostColor(host.status), Motion.move(), label = "hostDot")
   Row(
     Modifier.fillMaxWidth().clickable { onEvent(HomeUiEvent.ToggleCollapsed(host.id)) }.then(dragHandle)
       .padding(start = Space.l, end = Space.xs, top = Space.s, bottom = Space.s),
     verticalAlignment = Alignment.CenterVertically,
   ) {
-    Box(Modifier.size(8.dp).clip(CircleShape).background(hostColor(host.status)))
+    Box(Modifier.size(8.dp).clip(CircleShape).background(dot))
     Spacer(Modifier.width(Space.s))
     Column(Modifier.weight(1f)) {
       Text(host.name, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = Colors.ink, maxLines = 1)
@@ -106,7 +133,7 @@ private fun HostHeader(host: HostUi, onEvent: (HomeUiEvent) -> Unit, dragHandle:
         overflow = TextOverflow.Ellipsis,
       )
     }
-    host.state?.takeIf { host.collapsed && it != ProgramState.IDLE }?.let { StateDot(it, 10.dp) }
+    host.state?.takeIf { host.collapsed && it != ProgramState.IDLE }?.let { LiveDot(it, 10.dp) }
     Icon(
       Icons.Default.ExpandMore,
       contentDescription = if (host.collapsed) "Expand" else "Collapse",
@@ -185,16 +212,19 @@ private fun HostMenu(host: HostUi, onEvent: (HomeUiEvent) -> Unit) {
 private fun NewSessionRow(enabled: Boolean, busy: Boolean, onClick: () -> Unit) {
   val tint = if (enabled) Colors.accent else Colors.muted
   Row(
-    Modifier.fillMaxWidth().clickable(
+    Modifier.fillMaxWidth().pressScale().clickable(
       enabled = enabled,
       onClick = onClick,
     ).padding(horizontal = Space.l, vertical = Space.m),
     verticalAlignment = Alignment.CenterVertically,
   ) {
-    if (busy) {
-      CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Colors.accent)
-    } else {
-      Icon(Icons.Default.Add, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
+    // The plus shrinks away and the spinner grows in its place while the session is made.
+    AnimatedContent(targetState = busy, transitionSpec = { morph() }, label = "newSession") { spinning ->
+      if (spinning) {
+        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Colors.accent)
+      } else {
+        Icon(Icons.Default.Add, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
+      }
     }
     Spacer(Modifier.width(Space.s))
     Text("New session", color = tint, fontSize = 15.sp)
@@ -242,28 +272,41 @@ private fun SwipeBackground(direction: SwipeToDismissBoxValue) {
   }
 }
 
-/** One line per session: a state dot, the label, and what its program is doing (or how many tabs it has). */
+/**
+ * One line per session: who runs in it (badge with its state), the label, and what the
+ * program is doing (or how many tabs it has). A new activity line slides up over the old.
+ */
 @Composable
 private fun SessionRow(session: SessionUi, onClick: () -> Unit, modifier: Modifier = Modifier) {
   Row(
-    modifier.fillMaxWidth().background(Colors.surface).clickable(onClick = onClick)
+    modifier.fillMaxWidth().pressScale().background(Colors.surface).clickable(onClick = onClick)
       .padding(horizontal = Space.l, vertical = Space.m),
     verticalAlignment = Alignment.CenterVertically,
   ) {
-    val state = session.state?.takeIf { it != ProgramState.IDLE }
-    Box(Modifier.size(8.dp).clip(CircleShape).background(state?.let { stateColor(it) } ?: Colors.line))
+    AgentBadge(session.app, session.state, badgeSize)
     Spacer(Modifier.width(Space.m))
     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
       Text(session.label, color = Colors.ink, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-      Text(
-        session.activity ?: "${session.tabCount} tab${if (session.tabCount == 1) "" else "s"}",
-        color = Colors.muted,
-        fontSize = 12.sp,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-      )
+      AnimatedContent(
+        targetState = session.activity ?: "${session.tabCount} tab${if (session.tabCount == 1) "" else "s"}",
+        transitionSpec = { tickerTape() },
+        contentAlignment = Alignment.CenterStart,
+        label = "activity",
+      ) { line ->
+        Text(line, color = Colors.muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      }
     }
     Spacer(Modifier.width(Space.s))
     Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Colors.line, modifier = Modifier.size(18.dp))
   }
 }
+
+/** A line of text replaced like a ticker: the new one rises in as the old one drifts up and out. */
+private fun tickerTape() =
+  (slideInVertically(Motion.enter(Motion.STANDARD)) { it / 2 } + fadeIn(Motion.enter(Motion.STANDARD)))
+    .togetherWith(slideOutVertically(Motion.leave()) { -it / 2 } + fadeOut(Motion.leave()))
+
+/** One small icon turning into another: shrink and fade out, grow and fade in. */
+private fun morph() =
+  (scaleIn(Motion.enter(Motion.STANDARD), ICON_MORPH_SCALE) + fadeIn(Motion.enter(Motion.STANDARD)))
+    .togetherWith(scaleOut(Motion.leave(), ICON_MORPH_SCALE) + fadeOut(Motion.leave()))

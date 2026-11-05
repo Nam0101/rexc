@@ -3,8 +3,18 @@ package dev.namnv.rexc.presentation.terminal
 import android.view.KeyEvent
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
@@ -15,6 +25,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -60,8 +71,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.node.Ref
 import androidx.compose.ui.platform.LocalDensity
@@ -73,12 +86,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import dev.namnv.rexc.core.ui.theme.Colors
+import dev.namnv.rexc.core.ui.theme.Motion
 import dev.namnv.rexc.core.ui.theme.Radius
 import dev.namnv.rexc.core.ui.theme.Space
 import dev.namnv.rexc.data.TerminalController
+import dev.namnv.rexc.presentation.common.Agent
+import dev.namnv.rexc.presentation.common.AgentGlyph
+import dev.namnv.rexc.presentation.common.LiveDot
 import dev.namnv.rexc.presentation.common.LocalSettings
 import dev.namnv.rexc.presentation.common.MenuEntry
-import dev.namnv.rexc.presentation.home.StateDot
+import dev.namnv.rexc.presentation.common.pressScale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import uniffi.rexc_ffi.Frame
@@ -124,10 +141,7 @@ fun TerminalScreen(
         onCopyScreen = copyScreen,
         onSheet = sheets::open,
       )
-      TabsRow(state, ink, send)
-      if (state.panes.size > 1) PaneStrip(state, ink, send, onMap = { sheets.open(TerminalSheet.MAP) })
-      HorizontalDivider(thickness = Dp.Hairline, color = ink.copy(alpha = HAIRLINE))
-      state.search?.let { SearchBar(it, ink, onEvent) }
+      Bars(state, ink, send, onSearch = onEvent, onMap = { sheets.open(TerminalSheet.MAP) })
       PaneArea(
         state = state,
         input = input,
@@ -154,6 +168,40 @@ fun TerminalScreen(
   }
   renaming?.let { target -> RenameDialog(target, state, onDismiss = { renaming = null }, onEvent = send) }
   closing?.let { event -> ClosePaneDialog(onConfirm = { onEvent(event) }, onDismiss = { closing = null }) }
+}
+
+/** Between the title and the grid: tabs, the pane strip when a tab is split, and the find bar when open. */
+@Composable
+private fun ColumnScope.Bars(
+  state: TerminalUiState,
+  ink: Color,
+  onEvent: (TerminalUiEvent) -> Unit,
+  onSearch: (TerminalUiEvent) -> Unit,
+  onMap: () -> Unit,
+) {
+  TabsRow(state, ink, onEvent)
+  Reveal(visible = state.panes.size > 1) { PaneStrip(state, ink, onEvent, onMap) }
+  HorizontalDivider(thickness = Dp.Hairline, color = ink.copy(alpha = HAIRLINE))
+  val search = rememberLast(state.search)
+  Reveal(visible = state.search != null) { search?.let { SearchBar(it, ink, onSearch) } }
+}
+
+/** A bar that unfolds under the one above it and folds back up, instead of popping in and out. */
+@Composable
+private fun Reveal(visible: Boolean, content: @Composable () -> Unit) {
+  AnimatedVisibility(
+    visible = visible,
+    enter = expandVertically(Motion.enter(), expandFrom = Alignment.Top) + fadeIn(Motion.enter()),
+    exit = shrinkVertically(Motion.leave(Motion.STANDARD), shrinkTowards = Alignment.Top) + fadeOut(Motion.leave()),
+  ) { content() }
+}
+
+/** The last non-null [value], so a bar keeps its content while it folds away. */
+@Composable
+private fun <T : Any> rememberLast(value: T?): T? {
+  val last = remember { Ref<T>() }
+  if (value != null) last.value = value
+  return last.value
 }
 
 /** What the grid draws with: the typeface, the saved size (reported back when a pinch settles) and local echo. */
@@ -224,7 +272,8 @@ private data class ShownPane(val controller: TerminalController, val mirror: Boo
 
 /**
  * Slides panes past each other in reading order: the next pane comes in from the
- * right, the previous one from the left. Nothing is shown before the first opens.
+ * right and settles to full size while the previous one drifts out at a third of the
+ * pace, so the two read as layers. Nothing is shown before the first opens.
  */
 @Composable
 private fun PaneCarousel(state: TerminalUiState, pane: @Composable (ShownPane) -> Unit) {
@@ -237,7 +286,10 @@ private fun PaneCarousel(state: TerminalUiState, pane: @Composable (ShownPane) -
     transitionSpec = {
       val forward = (targetState?.ordinal ?: 0) >= (initialState?.ordinal ?: 0)
       val sign = if (forward) 1 else -1
-      (slideInHorizontally { sign * it } + fadeIn()) togetherWith (slideOutHorizontally { -sign * it } + fadeOut())
+      val enter = slideInHorizontally(Motion.enter()) { sign * it } + fadeIn(Motion.enter(Motion.STANDARD)) +
+        scaleIn(Motion.enter(), PANE_SCALE)
+      val leave = slideOutHorizontally(Motion.enter()) { -sign * it / PARALLAX } + fadeOut(Motion.leave(Motion.STANDARD))
+      enter togetherWith leave
     },
     label = "pane",
   ) { target ->
@@ -260,7 +312,12 @@ private fun PositionDots(state: TerminalUiState, modifier: Modifier) {
     delay(DOTS_MS)
     visible = false
   }
-  AnimatedVisibility(visible, modifier = modifier.padding(bottom = Space.m), enter = fadeIn(), exit = fadeOut()) {
+  AnimatedVisibility(
+    visible,
+    modifier = modifier.padding(bottom = Space.m),
+    enter = fadeIn(Motion.enter(Motion.STANDARD)) + scaleIn(Motion.settle(), DOTS_SCALE),
+    exit = fadeOut(Motion.leave()),
+  ) {
     Row(
       Modifier.clip(RoundedCornerShape(10.dp)).background(Colors.scrim).padding(horizontal = Space.s, vertical = 5.dp),
       horizontalArrangement = Arrangement.spacedBy(5.dp),
@@ -328,13 +385,11 @@ private fun TopBar(
     Modifier.fillMaxWidth().background(background).padding(end = Space.xs),
     verticalAlignment = Alignment.CenterVertically,
   ) {
-    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = onBg) }
+    IconButton(onClick = onBack, modifier = Modifier.pressScale(ICON_PRESS)) {
+      Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = onBg)
+    }
     // One line: host dot, session name, then the host in muted ink; the grid size lives in the pane map.
-    Box(
-      Modifier.size(
-        6.dp,
-      ).clip(CircleShape).background(if (state.hostStatus == HostStatus.CONNECTED) Colors.ok else Colors.amber),
-    )
+    HostDot(connected = state.hostStatus == HostStatus.CONNECTED)
     Spacer(Modifier.width(Space.s))
     Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
       Text(
@@ -346,16 +401,33 @@ private fun TopBar(
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier.weight(1f, fill = false),
       )
-      state.hostName?.let {
+      if (state.hostName.isNotBlank()) {
         Spacer(Modifier.width(Space.s))
-        Text(it, color = onBg.copy(alpha = MUTED_INK), fontSize = 12.sp, maxLines = 1)
+        Text(state.hostName, color = onBg.copy(alpha = MUTED_INK), fontSize = 12.sp, maxLines = 1)
       }
     }
-    IconButton(onClick = { onSheet(TerminalSheet.PALETTE) }) {
+    IconButton(onClick = { onSheet(TerminalSheet.PALETTE) }, modifier = Modifier.pressScale(ICON_PRESS)) {
       Text("⌘", color = onBg, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
     }
     PaneMenu(state, tint = onBg, onEvent = onEvent, onRename = onRename, onCopyScreen = onCopyScreen, onSheet = onSheet)
   }
+}
+
+/** The host's link: steady green, or amber breathing while it (re)connects. */
+@Composable
+private fun HostDot(connected: Boolean) {
+  val color by animateColorAsState(if (connected) Colors.ok else Colors.amber, Motion.move(), label = "host")
+  val pulse = if (connected) {
+    null
+  } else {
+    rememberInfiniteTransition(label = "hostPulse").animateFloat(
+      initialValue = PULSE_MIN,
+      targetValue = 1f,
+      animationSpec = infiniteRepeatable(tween(PULSE_MS, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+      label = "hostPulse",
+    )
+  }
+  Box(Modifier.size(6.dp).graphicsLayer { alpha = pulse?.value ?: 1f }.clip(CircleShape).background(color))
 }
 
 @Composable
@@ -373,7 +445,9 @@ private fun PaneMenu(
     action()
   }
   Box {
-    IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, contentDescription = "Menu", tint = tint) }
+    IconButton(onClick = { menu = true }, modifier = Modifier.pressScale(ICON_PRESS)) {
+      Icon(Icons.Default.MoreVert, contentDescription = "Menu", tint = tint)
+    }
     // Only what the palette (⌘) does not cover better: the frequent few and the destructive ones.
     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
       MenuEntry("Find") { pick { onEvent(TerminalUiEvent.OpenSearch) } }
@@ -400,15 +474,19 @@ private fun PaneStrip(state: TerminalUiState, ink: Color, onEvent: (TerminalUiEv
     items(state.panes, key = { it.blockId }) { pane ->
       val selected = pane.blockId == state.currentBlockId
       Row(
-        Modifier.clip(
+        Modifier.pressScale(CHIP_PRESS).clip(
           RoundedCornerShape(8.dp),
         ).background(if (selected) ink.copy(alpha = CHROME_TINT) else Color.Transparent)
           .clickable { onEvent(TerminalUiEvent.SelectPane(pane.blockId)) }
           .padding(horizontal = Space.s, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
       ) {
+        if (Agent.of(pane.app) != Agent.SHELL) {
+          AgentGlyph(pane.app, glyphSize)
+          Spacer(Modifier.width(5.dp))
+        }
         pane.state?.takeIf { it != ProgramState.IDLE }?.let {
-          StateDot(it, 6.dp)
+          LiveDot(it, 6.dp)
           Spacer(Modifier.width(5.dp))
         }
         Text(
@@ -433,9 +511,10 @@ internal fun Chip(
   modifier: Modifier = Modifier,
   content: @Composable RowScope.() -> Unit,
 ) {
+  val fill by animateColorAsState(ink.copy(alpha = if (selected) SELECTED_TINT else CHROME_TINT), Motion.move(), "chip")
   Row(
-    modifier.clip(RoundedCornerShape(Radius.chip))
-      .background(ink.copy(alpha = if (selected) SELECTED_TINT else CHROME_TINT))
+    modifier.pressScale(CHIP_PRESS).clip(RoundedCornerShape(Radius.chip))
+      .drawBehind { drawRect(fill) }
       .clickable(onClick = onClick)
       .padding(horizontal = Space.m, vertical = 5.dp),
     verticalAlignment = Alignment.CenterVertically,
@@ -466,8 +545,8 @@ private fun StatusOverlay(state: TerminalUiState, onEvent: (TerminalUiEvent) -> 
   AnimatedVisibility(
     visible = text != null,
     modifier = modifier.padding(top = Space.s),
-    enter = fadeIn() + slideInVertically { -it / 2 },
-    exit = fadeOut() + slideOutVertically { -it / 2 },
+    enter = fadeIn(Motion.enter()) + slideInVertically(Motion.settle()) { -it / 2 },
+    exit = fadeOut(Motion.leave()) + slideOutVertically(Motion.leave()) { -it / 2 },
   ) {
     Row(
       Modifier.shadow(8.dp, RoundedCornerShape(20.dp))
@@ -502,6 +581,14 @@ private const val MUTED_INK = 0.6f
 private const val HAIRLINE = 0.08f
 private const val DOTS_MS = 1_200L
 private const val MAX_DOTS = 10
+private const val DOTS_SCALE = 0.8f
+private const val ICON_PRESS = 0.85f
+private const val CHIP_PRESS = 0.95f
+private const val PULSE_MIN = 0.35f
+private const val PULSE_MS = 900
+private const val PARALLAX = 3
+private const val PANE_SCALE = 0.96f
+private val glyphSize = 11.dp
 private val inkOnLight = Color(0xFF1C1C1E)
 private val inkOnDark = Color(0xFFF2F2F7)
 

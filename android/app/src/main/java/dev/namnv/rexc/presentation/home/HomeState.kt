@@ -48,6 +48,8 @@ data class SessionUi(
   val state: ProgramState?,
   /** What the most urgent program in the session is doing ("claude-code · adding hosts"), if any. */
   val activity: String? = null,
+  /** The program's app name, for its badge; null is a plain shell. */
+  val app: String? = null,
 )
 
 @Immutable
@@ -143,6 +145,7 @@ fun Session.toUi(program: InboxItem? = null): SessionUi = SessionUi(
   label = label,
   tabCount = windows.size,
   state = windows.flatMap { w -> w.blocks.map { it.state } }.mostUrgent(),
+  app = program?.app ?: windows.flatMap { it.blocks }.firstNotNullOfOrNull { it.app },
   activity = program?.let { p ->
     val detail = p.message?.takeIf { it.isNotBlank() } ?: p.title?.takeIf { it.isNotBlank() }
     listOfNotNull(p.app, detail).joinToString(" · ")

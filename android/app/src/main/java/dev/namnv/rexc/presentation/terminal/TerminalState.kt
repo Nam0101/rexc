@@ -44,7 +44,14 @@ data class TerminalUiState(
 data class SearchUi(val query: String = "", val count: Int = 0, val current: Int? = null)
 
 @Immutable
-data class TabUi(val id: String, val name: String, val busy: Boolean, val state: ProgramState?)
+data class TabUi(
+  val id: String,
+  val name: String,
+  val busy: Boolean,
+  val state: ProgramState?,
+  /** The app of the tab's most urgent pane, for its glyph. */
+  val app: String? = null,
+)
 
 @Immutable
 data class PaneUi(
@@ -58,6 +65,7 @@ data class PaneUi(
   val y: Float = 0f,
   val w: Float = 1f,
   val h: Float = 1f,
+  val app: String? = null,
 )
 
 enum class StreamUi { CONNECTING, LIVE, RECONNECTING, ENDED }
@@ -157,12 +165,16 @@ fun neighbourPane(session: Session, blockId: String?, delta: Int): Block? {
   return all[Math.floorMod(index + delta, all.size)]
 }
 
-fun Window.toTab(): TabUi = TabUi(
-  id = windowId,
-  name = displayName,
-  busy = busy,
-  state = blocks.mapNotNull { it.state }.minByOrNull { urgencyOf(it) },
-)
+fun Window.toTab(): TabUi {
+  val urgent = blocks.mapNotNull { b -> b.state?.let { it to b } }.minByOrNull { urgencyOf(it.first) }
+  return TabUi(
+    id = windowId,
+    name = displayName,
+    busy = busy,
+    state = urgent?.first,
+    app = urgent?.second?.app ?: blocks.firstNotNullOfOrNull { it.app },
+  )
+}
 
 /** What a pane is called on screen. */
 fun Block.paneName(): String = displayTitle ?: app ?: process ?: pwdShort ?: "shell"
@@ -177,6 +189,7 @@ fun Block.toPane(): PaneUi = PaneUi(
   y = y.toFloat(),
   w = w.toFloat(),
   h = h.toFloat(),
+  app = app,
 )
 
 fun TerminalInfo.toUi(ownerLabel: String?): TerminalInfoUi = TerminalInfoUi(

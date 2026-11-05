@@ -48,6 +48,7 @@ class HomeStateTest {
     assertEquals(2, ui.tabCount)
     assertEquals(ProgramState.BLOCKED, ui.state)
     assertEquals(null, ui.activity)
+    assertEquals("claude", ui.app)
   }
 
   @Test
@@ -105,7 +106,9 @@ class HomeStateTest {
       inbox("other", "codex", ProgramState.ERROR, "elsewhere"),
     )
     assertEquals("codex · needs a yes", host.toUi(inbox = inbox).sessions.single().activity)
+    assertEquals("codex", host.toUi(inbox = inbox).sessions.single().app)
     assertEquals(null, host.toUi().sessions.single().activity)
+    assertEquals(null, host.toUi().sessions.single().app)
   }
 
   @Test

@@ -47,7 +47,9 @@ import dev.namnv.rexc.core.ui.theme.MonoFamily
 import dev.namnv.rexc.core.ui.theme.Radius
 import dev.namnv.rexc.core.ui.theme.Space
 import dev.namnv.rexc.navigation.Terminal
+import dev.namnv.rexc.presentation.common.AgentBadge
 import dev.namnv.rexc.presentation.common.LocalSettings
+import dev.namnv.rexc.presentation.common.pressScale
 import dev.namnv.rexc.presentation.common.sharedBoundsFor
 import uniffi.rexc_ffi.ProgramState
 
@@ -60,13 +62,14 @@ internal fun InboxCard(item: InboxUi, onEvent: (HomeUiEvent) -> Unit) {
   Column(
     modifier = Modifier.fillMaxWidth()
       .sharedBoundsFor(Terminal(item.hostId, item.sessionId, item.blockId).sharedKey)
+      .pressScale()
       .background(Colors.surface)
       .clickable { onEvent(HomeUiEvent.OpenInbox(item)) }
       .padding(horizontal = Space.l, vertical = Space.m),
     verticalArrangement = Arrangement.spacedBy(Space.s),
   ) {
     Row(verticalAlignment = Alignment.Top) {
-      Box(Modifier.padding(top = 6.dp)) { StateDot(item.state, size = 8.dp) }
+      AgentBadge(item.app, item.state, BADGE_SIZE)
       Spacer(Modifier.width(Space.m))
       Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         val label = stateLabel(item.state, item.kind)
@@ -166,5 +169,6 @@ private fun ReplyRow(sending: Boolean, onSend: (String) -> Unit) {
 }
 
 private const val PREVIEW_LINES = 3
+private val BADGE_SIZE = 28.dp
 private const val PREVIEW_INK = 0.85f
 private val REPLY_HEIGHT = 40.dp

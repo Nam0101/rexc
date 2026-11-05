@@ -1,5 +1,6 @@
 package dev.namnv.rexc.presentation.terminal
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
@@ -44,10 +45,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
-import dev.namnv.rexc.core.ui.theme.Colors
+import dev.namnv.rexc.core.ui.theme.Motion
 import dev.namnv.rexc.core.ui.theme.Radius
 import dev.namnv.rexc.core.ui.theme.Space
-import dev.namnv.rexc.presentation.home.StateDot
+import dev.namnv.rexc.presentation.common.Agent
+import dev.namnv.rexc.presentation.common.AgentGlyph
+import dev.namnv.rexc.presentation.common.LiveDot
 import uniffi.rexc_ffi.ProgramState
 
 /**
@@ -121,10 +124,15 @@ private fun TabChip(
       shadowElevation = if (dragging) LIFT_ELEVATION else 0f
     },
   ) {
+    if (Agent.of(tab.app) != Agent.SHELL) {
+      AgentGlyph(tab.app, glyphSize)
+      Spacer(Modifier.width(5.dp))
+    }
     tab.state?.takeIf { it != ProgramState.IDLE }?.let {
-      StateDot(it, 7.dp)
+      LiveDot(it, 7.dp)
       Spacer(Modifier.width(6.dp))
     }
+    val label by animateColorAsState(if (selected) ink else ink.copy(alpha = UNSELECTED_INK), Motion.move(), "tabInk")
     Text(
       tab.name,
       fontSize = 13.sp,
@@ -132,7 +140,7 @@ private fun TabChip(
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,
       textAlign = TextAlign.Center,
-      color = if (selected) ink else ink.copy(alpha = UNSELECTED_INK),
+      color = label,
       modifier = Modifier.weight(1f),
     )
     if (selected && closable) {
@@ -140,7 +148,7 @@ private fun TabChip(
       Icon(
         Icons.Default.Close,
         contentDescription = "Close tab",
-        tint = Colors.onAccent,
+        tint = ink,
         modifier = Modifier.clip(
           RoundedCornerShape(Radius.chip),
         ).clickable(onClick = onClose).padding(2.dp).size(14.dp),
@@ -213,5 +221,6 @@ private val MIN_TAB_WIDTH = 72.dp
 private val MAX_TAB_WIDTH = 180.dp
 private val SCROLL_TAB_WIDTH = 128.dp
 private const val UNSELECTED_INK = 0.7f
+private val glyphSize = 11.dp
 private const val LIFT_SCALE = 1.04f
 private const val LIFT_ELEVATION = 12f
