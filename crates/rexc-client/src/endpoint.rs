@@ -233,8 +233,8 @@ mod tests {
         assert_eq!(Endpoint::parse("192.0.2.10:7300").unwrap(), tcp("192.0.2.10", 7300, false));
         assert_eq!(Endpoint::parse("my-mac.tail1234.ts.net").unwrap(), tcp("my-mac.tail1234.ts.net", 443, true));
         assert_eq!(Endpoint::parse("https://my-mac.tail1234.ts.net/").unwrap(), tcp("my-mac.tail1234.ts.net", 443, true));
-        assert_eq!(Endpoint::parse("100.77.181.92").unwrap(), tcp("100.77.181.92", 443, true));
-        assert_eq!(Endpoint::parse("100.77.181.92:7297").unwrap(), tcp("100.77.181.92", 7297, false));
+        assert_eq!(Endpoint::parse("100.64.0.7").unwrap(), tcp("100.64.0.7", 443, true));
+        assert_eq!(Endpoint::parse("100.64.0.7:7297").unwrap(), tcp("100.64.0.7", 7297, false));
         assert_eq!(Endpoint::parse("http://box:443").unwrap(), tcp("box", 443, false));
         assert_eq!(Endpoint::parse("[fd7a:115c:a1e0::1]").unwrap(), tcp("fd7a:115c:a1e0::1", 443, true));
         assert_eq!(Endpoint::parse("unix:///tmp/a%20b.sock").unwrap(), Endpoint::Unix("/tmp/a b.sock".into()));

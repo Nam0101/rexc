@@ -119,9 +119,9 @@ mod tests {
 
     #[test]
     fn builds_a_query_in_wire_format() {
-        let q = a_query(0xBEEF, "mini.tailc69fce.ts.net").unwrap();
+        let q = a_query(0xBEEF, "mini.tail1234.ts.net").unwrap();
         assert_eq!(&q[..12], &[0xBE, 0xEF, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0]);
-        assert_eq!(&q[12..], b"\x04mini\x0atailc69fce\x02ts\x03net\0\0\x01\0\x01");
+        assert_eq!(&q[12..], b"\x04mini\x08tail1234\x02ts\x03net\0\0\x01\0\x01");
         assert!(a_query(1, "bad..name").is_err());
     }
 
