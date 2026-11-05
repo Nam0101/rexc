@@ -56,6 +56,9 @@ private const val BACK_SCALE = 0.9f
 /** Marks entries that morph out of a list card: their push and pop only cross-fade around that. */
 private const val SHARED_ENTRY = "rexc.sharedEntry"
 
+/** What the terminal asks the shell to open for it (the palette's "Settings" entry). */
+private const val REQUEST_SETTINGS = "settings"
+
 private fun Scene<NavKey>.isShared() = entries.lastOrNull()?.metadata?.containsKey(SHARED_ENTRY) == true
 
 private fun AnimatedContentTransitionScope<Scene<NavKey>>.push(): ContentTransform = if (targetState.isShared()) {
@@ -135,6 +138,8 @@ class MainActivity : ComponentActivity() {
                       key = key,
                       onBack = { backStack.removeLastOrNull() },
                       modifier = Modifier.sharedBoundsFor(key.sharedKey),
+                      onOpen = { backStack.add(it) },
+                      onRequest = { if (it == REQUEST_SETTINGS) backStack.add(Settings) },
                     )
                   }
                 },

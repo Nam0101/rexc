@@ -11,6 +11,8 @@ import dev.namnv.rexc.base.HasEventFlow
 import dev.namnv.rexc.core.dispatcher.AppCoroutineDispatchers
 import dev.namnv.rexc.core.dispatcher.WHILE_UI_SUBSCRIBED
 import dev.namnv.rexc.data.EngineRepository
+import dev.namnv.rexc.data.OpenMode
+import dev.namnv.rexc.data.SettingsRepository
 import dev.namnv.rexc.data.TerminalController
 import dev.namnv.rexc.navigation.Terminal
 import kotlinx.collections.immutable.persistentListOf
@@ -46,6 +48,7 @@ import uniffi.rexc_ffi.TerminalInfo
 class TerminalViewModel @AssistedInject constructor(
   @Assisted private val key: Terminal,
   private val repo: EngineRepository,
+  private val settings: SettingsRepository,
   private val dispatchers: AppCoroutineDispatchers,
 ) : ViewModel(),
   HasEventFlow<TerminalEffect> {
@@ -128,7 +131,8 @@ class TerminalViewModel @AssistedInject constructor(
     opened.value = null
     if (blockId == null) return
     try {
-      val id = repo.call { openTerminal(key.hostId, key.sessionId, blockId, false) }
+      val take = settings.settings.value.openMode == OpenMode.FIT
+      val id = repo.call { openTerminal(key.hostId, key.sessionId, blockId, take) }
       val controller = repo.terminal(id)
       opened.value = Opened(controller, blockId, controller.info())
       repo.call { setLastPosition(key.hostId, key.sessionId, selection.value.tabId, blockId) }

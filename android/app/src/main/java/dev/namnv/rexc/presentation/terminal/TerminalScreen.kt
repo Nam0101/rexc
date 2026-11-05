@@ -76,6 +76,7 @@ import dev.namnv.rexc.core.ui.theme.Colors
 import dev.namnv.rexc.core.ui.theme.Radius
 import dev.namnv.rexc.core.ui.theme.Space
 import dev.namnv.rexc.data.TerminalController
+import dev.namnv.rexc.presentation.common.LocalSettings
 import dev.namnv.rexc.presentation.common.MenuEntry
 import dev.namnv.rexc.presentation.home.StateDot
 import kotlinx.coroutines.delay
@@ -104,6 +105,12 @@ fun TerminalScreen(
   val sheets = rememberSheetsState()
   val toggleKeyboard: () -> Unit = { bridge?.let { b -> if (imeVisible) b.hide() else b.show() } }
   val copyScreen: () -> Unit = { state.terminal?.allText()?.takeIf { it.isNotEmpty() }?.let(input::copy) }
+  val settings = LocalSettings.current
+  var closing by remember { mutableStateOf<TerminalUiEvent?>(null) }
+  val send: (
+    TerminalUiEvent,
+  ) -> Unit = { if (settings.confirmClosePane && it.closesPane()) closing = it else onEvent(it) }
+  KeepScreenOn(settings.keepScreenOn)
   Scaffold(
     modifier = modifier.fillMaxSize(),
     containerColor = chrome,
@@ -114,14 +121,14 @@ fun TerminalScreen(
       TopBar(
         state = state,
         background = chrome,
-        onEvent = onEvent,
+        onEvent = send,
         onBack = onBack,
         onRename = { renaming = it },
         onCopyScreen = copyScreen,
         onSheet = sheets::open,
       )
-      TabsRow(state, ink, onEvent)
-      if (state.panes.size > 1) PaneStrip(state, ink, onEvent, onMap = { sheets.open(TerminalSheet.MAP) })
+      TabsRow(state, ink, send)
+      if (state.panes.size > 1) PaneStrip(state, ink, send, onMap = { sheets.open(TerminalSheet.MAP) })
       HorizontalDivider(thickness = Dp.Hairline, color = ink.copy(alpha = HAIRLINE))
       PaneArea(
         state = state,
@@ -131,7 +138,7 @@ fun TerminalScreen(
         imeVisible = imeVisible,
         onBridge = { bridge = it },
         onBackground = { termBg = it },
-        onEvent = onEvent,
+        onEvent = send,
         onShortcut = sheets::onHardwareKey,
         modifier = Modifier.weight(1f).fillMaxWidth(),
       )
@@ -141,11 +148,13 @@ fun TerminalScreen(
         onToggleKeyboard = toggleKeyboard,
         background = chrome,
         onOpenSheet = sheets::open,
+        hapticsEnabled = settings.haptics,
       )
     }
-    TerminalSheets(sheets, state, SheetHost(onEvent, { renaming = it }, copyScreen, input::paste, toggleKeyboard))
+    TerminalSheets(sheets, state, SheetHost(send, { renaming = it }, copyScreen, input::paste, toggleKeyboard))
   }
-  renaming?.let { target -> RenameDialog(target, state, onDismiss = { renaming = null }, onEvent = onEvent) }
+  renaming?.let { target -> RenameDialog(target, state, onDismiss = { renaming = null }, onEvent = send) }
+  closing?.let { event -> ClosePaneDialog(onConfirm = { onEvent(event) }, onDismiss = { closing = null }) }
 }
 
 /** The grid with its keyboard bridge and the overlays over it. */
