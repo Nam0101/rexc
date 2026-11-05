@@ -77,7 +77,8 @@ jobs:
         env:
           KEYSTORE_BASE64: ${{ secrets.REXC_KEYSTORE_BASE64 }}
           REXC_KEYSTORE_PASSWORD: ${{ secrets.REXC_KEYSTORE_PASSWORD }}
-          REXC_KEY_ALIAS: ${{ secrets.REXC_KEY_ALIAS }}
+          # Not a secret: a secret named "rexc" would mask the repo name in every log line.
+          REXC_KEY_ALIAS: rexc
           REXC_KEY_PASSWORD: ${{ secrets.REXC_KEY_PASSWORD }}
         run: |
           if [ -z "$KEYSTORE_BASE64" ]; then

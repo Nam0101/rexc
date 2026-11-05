@@ -55,7 +55,7 @@ Rust for Android needs zig (libghostty) and the NDK: `scripts/build-android.sh` 
 
 Quality gates: `cargo test --workspace`, `./gradlew spotlessCheck detekt testDebugUnitTest`.
 
-Releases: pushing a `vX.Y.Z` tag runs `.github/workflows/release.yml`, which builds the arm64 APK signed with the upload key from the repo secrets (`REXC_KEYSTORE_BASE64`, `REXC_KEYSTORE_PASSWORD`, `REXC_KEY_ALIAS`, `REXC_KEY_PASSWORD`) and publishes it as a GitHub Release. Run the workflow by hand to get the APK as a run artifact without a release.
+Releases: pushing a `vX.Y.Z` tag runs `.github/workflows/release.yml`, which builds the arm64 APK signed with the upload key from the repo secrets (`REXC_KEYSTORE_BASE64`, `REXC_KEYSTORE_PASSWORD`, `REXC_KEY_PASSWORD`; alias `rexc`) and publishes it as a GitHub Release. Run the workflow by hand to get the APK as a run artifact without a release.
 
 ## Adding a server from the desktop
 
