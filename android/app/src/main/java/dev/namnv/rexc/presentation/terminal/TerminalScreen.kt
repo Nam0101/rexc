@@ -189,7 +189,7 @@ private fun PaneArea(
         frames = frames,
         onSwipePane = { onEvent(TerminalUiEvent.SwipePane(it)) },
         onLink = { onEvent(TerminalUiEvent.OpenUrl(it)) },
-        onTap = { bridge?.let { b -> if (imeVisible) b.hide() else b.show() } },
+        onTap = { toggle -> bridge?.let { b -> if (!imeVisible) b.show() else if (toggle) b.hide() } },
         onBackground = onBackground,
         modifier = Modifier.fillMaxSize(),
         font = canvas.font,

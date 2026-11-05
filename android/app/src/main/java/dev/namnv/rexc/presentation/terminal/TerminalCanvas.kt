@@ -102,7 +102,8 @@ fun TerminalCanvas(
   frames: Flow<Frame>,
   onSwipePane: (Int) -> Unit,
   onLink: (String) -> Unit,
-  onTap: () -> Unit,
+  /** A tap that needs the keyboard: `toggle` flips it; otherwise it only comes up when hidden. */
+  onTap: (toggle: Boolean) -> Unit,
   onBackground: (Color) -> Unit,
   modifier: Modifier = Modifier,
   font: TerminalFont = TerminalFont.JETBRAINS_MONO,
@@ -278,12 +279,15 @@ private fun CanvasState.startSelection(pos: Offset, controller: TerminalControll
   }
 }
 
-/** A tap: dismiss the toolbar, else open a link, else click for a mouse-tracking program, else toggle the keyboard. */
+/**
+ * A tap: dismiss the toolbar, else open a link, else toggle the keyboard. A mouse-tracking
+ * program gets the click too, and the keyboard comes up if hidden so the tap still lets you type.
+ */
 private fun CanvasState.handleTap(
   pos: Offset,
   controller: TerminalController,
   onLink: (String) -> Unit,
-  onTap: () -> Unit,
+  onTap: (toggle: Boolean) -> Unit,
 ) {
   if (toolbar) {
     controller.clearSelection()
@@ -294,8 +298,11 @@ private fun CanvasState.handleTap(
   val link = controller.linkAt(c, r)
   when {
     link != null -> onLink(link)
-    frame?.mouseTracking == true -> controller.click(c, r, right = false)
-    else -> onTap()
+    frame?.mouseTracking == true -> {
+      controller.click(c, r, right = false)
+      onTap(false)
+    }
+    else -> onTap(true)
   }
 }
 
@@ -305,7 +312,7 @@ private fun Modifier.selectionGestures(
   state: CanvasState,
   controller: TerminalController,
   onLink: (String) -> Unit,
-  onTap: () -> Unit,
+  onTap: (toggle: Boolean) -> Unit,
 ): Modifier {
   val haptics = LocalHapticFeedback.current
   var pressAt by remember(state) { mutableStateOf(Offset.Zero) }
