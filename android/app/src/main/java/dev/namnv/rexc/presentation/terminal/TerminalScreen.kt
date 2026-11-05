@@ -95,10 +95,7 @@ fun TerminalScreen(
   onEvent: (TerminalUiEvent) -> Unit,
   onBack: () -> Unit,
   modifier: Modifier = Modifier,
-  font: TerminalFont = TerminalFont.JETBRAINS_MONO,
-  fontSize: Float = DEFAULT_FONT_SP,
-  onFontSizeChanged: (Float) -> Unit = {},
-  localEcho: Boolean = true,
+  canvas: CanvasSettings = CanvasSettings(),
 ) {
   var termBg by remember { mutableStateOf<Color?>(null) }
   val chrome = termBg ?: Colors.bg
@@ -109,12 +106,8 @@ fun TerminalScreen(
   val sheets = rememberSheetsState()
   val toggleKeyboard: () -> Unit = { bridge?.let { b -> if (imeVisible) b.hide() else b.show() } }
   val copyScreen: () -> Unit = { state.terminal?.allText()?.takeIf { it.isNotEmpty() }?.let(input::copy) }
-  val settings = LocalSettings.current
   var closing by remember { mutableStateOf<TerminalUiEvent?>(null) }
-  val send: (
-    TerminalUiEvent,
-  ) -> Unit = { if (settings.confirmClosePane && it.closesPane()) closing = it else onEvent(it) }
-  KeepScreenOn(settings.keepScreenOn)
+  val send = guardClose(LocalSettings.current.confirmClosePane, onEvent) { closing = it }
   Scaffold(
     modifier = modifier.fillMaxSize(),
     containerColor = chrome,
@@ -145,7 +138,7 @@ fun TerminalScreen(
         onBackground = { termBg = it },
         onEvent = send,
         onShortcut = sheets::onHardwareKey,
-        canvas = CanvasSettings(font, fontSize, onFontSizeChanged, localEcho),
+        canvas = canvas,
         modifier = Modifier.weight(1f).fillMaxWidth(),
       )
       Dock(
@@ -154,7 +147,7 @@ fun TerminalScreen(
         onToggleKeyboard = toggleKeyboard,
         background = chrome,
         onOpenSheet = sheets::open,
-        hapticsEnabled = settings.haptics,
+        hapticsEnabled = LocalSettings.current.haptics,
       )
     }
     TerminalSheets(sheets, state, SheetHost(send, { renaming = it }, copyScreen, input::paste, toggleKeyboard))
@@ -163,13 +156,13 @@ fun TerminalScreen(
   closing?.let { event -> ClosePaneDialog(onConfirm = { onEvent(event) }, onDismiss = { closing = null }) }
 }
 
-/** How the grid is drawn, as the user set it. */
+/** What the grid draws with: the typeface, the saved size (reported back when a pinch settles) and local echo. */
 @Immutable
-private data class CanvasSettings(
-  val font: TerminalFont,
-  val fontSize: Float,
-  val onFontSizeChanged: (Float) -> Unit,
-  val localEcho: Boolean,
+data class CanvasSettings(
+  val font: TerminalFont = TerminalFont.JETBRAINS_MONO,
+  val fontSize: Float = DEFAULT_FONT_SP,
+  val onFontSizeChanged: (Float) -> Unit = {},
+  val localEcho: Boolean = true,
 )
 
 /** The grid with its keyboard bridge and the overlays over it. */

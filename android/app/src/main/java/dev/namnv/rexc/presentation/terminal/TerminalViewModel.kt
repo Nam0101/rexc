@@ -216,7 +216,13 @@ class TerminalViewModel @AssistedInject constructor(
       is TerminalUiEvent.CloseBlock -> call { closeBlock(key.hostId, key.sessionId, event.blockId) }
       is TerminalUiEvent.FocusOnDesktop -> call { focusBlock(key.hostId, key.sessionId, event.blockId) }
       is TerminalUiEvent.Request ->
-        if (event.id == REQUEST_FIND) search.update { it ?: SearchUi() } else effects.trySend(TerminalEffect.Request(event.id))
+        if (event.id == REQUEST_FIND) {
+          search.update {
+            it ?: SearchUi()
+          }
+        } else {
+          effects.trySend(TerminalEffect.Request(event.id))
+        }
     }
   }
 

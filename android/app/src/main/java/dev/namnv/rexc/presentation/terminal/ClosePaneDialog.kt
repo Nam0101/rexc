@@ -29,6 +29,13 @@ fun ClosePaneDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
 /** The events that remove a pane and so deserve the confirmation. */
 fun TerminalUiEvent.closesPane(): Boolean = this is TerminalUiEvent.ClosePane || this is TerminalUiEvent.CloseBlock
 
+/** [onEvent] for everything, except that pane-closing events go to [onAsk] first when [confirm] is on. */
+fun guardClose(
+  confirm: Boolean,
+  onEvent: (TerminalUiEvent) -> Unit,
+  onAsk: (TerminalUiEvent) -> Unit,
+): (TerminalUiEvent) -> Unit = { if (confirm && it.closesPane()) onAsk(it) else onEvent(it) }
+
 /** Keeps the display on while the terminal is on screen, released when it leaves. */
 @Composable
 fun KeepScreenOn(enabled: Boolean) {

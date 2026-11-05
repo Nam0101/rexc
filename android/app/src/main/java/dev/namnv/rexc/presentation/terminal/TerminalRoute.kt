@@ -13,6 +13,7 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.namnv.rexc.navigation.Terminal
 import dev.namnv.rexc.presentation.common.CollectSideEffect
+import dev.namnv.rexc.presentation.common.LocalSettings
 
 /** Stateful host for one session's terminal. */
 @Composable
@@ -35,6 +36,7 @@ fun TerminalRoute(
   val input = remember { TerminalInput(context) }
   LaunchedEffect(state.terminal) { input.terminal = state.terminal }
   LaunchedEffect(state.gone) { if (state.gone) onBack() }
+  KeepScreenOn(LocalSettings.current.keepScreenOn)
   viewModel.eventFlow.CollectSideEffect { effect ->
     when (effect) {
       is TerminalEffect.Message -> snackbar.showSnackbar(effect.text)
@@ -53,9 +55,6 @@ fun TerminalRoute(
     onEvent = viewModel::onEvent,
     onBack = onBack,
     modifier = modifier,
-    font = font,
-    fontSize = fontSize,
-    onFontSizeChanged = onFontSizeChanged,
-    localEcho = localEcho,
+    canvas = CanvasSettings(font, fontSize, onFontSizeChanged, localEcho),
   )
 }

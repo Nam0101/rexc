@@ -99,10 +99,7 @@ class MainActivity : ComponentActivity() {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
     readIntent(intent)
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-      registerForActivityResult(ActivityResultContracts.RequestPermission()) {
-      }.launch(Manifest.permission.POST_NOTIFICATIONS)
-    }
+    askNotificationPermission()
     engine.connectAll()
     setContent {
       val settings by settingsRepository.settings.collectAsStateWithLifecycle()
@@ -155,6 +152,13 @@ class MainActivity : ComponentActivity() {
           }
         }
       }
+    }
+  }
+
+  private fun askNotificationPermission() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+      }.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
   }
 
