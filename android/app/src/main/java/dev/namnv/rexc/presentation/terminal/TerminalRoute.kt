@@ -16,7 +16,15 @@ import dev.namnv.rexc.presentation.common.CollectSideEffect
 
 /** Stateful host for one session's terminal. */
 @Composable
-fun TerminalRoute(key: Terminal, onBack: () -> Unit, modifier: Modifier = Modifier) {
+fun TerminalRoute(
+  key: Terminal,
+  onBack: () -> Unit,
+  modifier: Modifier = Modifier,
+  font: TerminalFont = TerminalFont.JETBRAINS_MONO,
+  fontSize: Float = DEFAULT_FONT_SP,
+  onFontSizeChanged: (Float) -> Unit = {},
+  localEcho: Boolean = true,
+) {
   val viewModel: TerminalViewModel =
     hiltViewModel<TerminalViewModel, TerminalViewModel.Factory>(key = key.toString()) { it.create(key) }
   val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -41,5 +49,9 @@ fun TerminalRoute(key: Terminal, onBack: () -> Unit, modifier: Modifier = Modifi
     onEvent = viewModel::onEvent,
     onBack = onBack,
     modifier = modifier,
+    font = font,
+    fontSize = fontSize,
+    onFontSizeChanged = onFontSizeChanged,
+    localEcho = localEcho,
   )
 }

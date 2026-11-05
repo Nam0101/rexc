@@ -37,6 +37,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -48,6 +49,9 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import dev.namnv.rexc.core.ui.theme.Colors
 import dev.namnv.rexc.core.ui.theme.Space
 import dev.namnv.rexc.data.TerminalController
@@ -62,8 +66,9 @@ import kotlinx.coroutines.flow.filterNotNull
 import uniffi.rexc_ffi.Frame
 
 private const val BLINK_MS = 530L
+private const val FONT_SAVE_DEBOUNCE_MS = 400L
 private const val SWIPE_VELOCITY = 900f
-private const val DEFAULT_FONT_SP = 12.5f
+const val DEFAULT_FONT_SP = 12.5f
 private val FONT_SP_RANGE = 7f..28f
 private const val MAX_MIRROR_ZOOM = 4f
 
@@ -80,8 +85,14 @@ private const val MIN_ROWS = 4
  * Fit (we own the pane): the grid is sized to this box; pinch changes the font.
  * Mirror (another client owns it): the grid is scaled to fit the width; pinch zooms.
  *
- * Frames are read in the draw phase only, so a new frame redraws without recomposing.
+ * Frames are read in the draw phase only, so a new frame redraws without recomposing. The grid and the
+ * overlay (cursor, typed-ahead text, scroll thumb) are separate layers: a blinking cursor repaints only the overlay.
+ * Frames are built only while the screen is started, so a backgrounded pane costs nothing.
+ *
+ * [initialFontSize] is the saved size; [onFontSizeChanged] reports the size once a pinch settles.
+ * [localEcho] shows typed text ahead of a slow server.
  */
+@Suppress("LongParameterList") // gestures and settings are separate callbacks by design
 @Composable
 fun TerminalCanvas(
   controller: TerminalController,
@@ -93,58 +104,59 @@ fun TerminalCanvas(
   onTap: () -> Unit,
   onBackground: (Color) -> Unit,
   modifier: Modifier = Modifier,
+  font: TerminalFont = TerminalFont.JETBRAINS_MONO,
+  initialFontSize: Float = DEFAULT_FONT_SP,
+  onFontSizeChanged: (Float) -> Unit = {},
+  localEcho: Boolean = true,
 ) {
   val context = LocalContext.current
+  val lifecycle = LocalLifecycleOwner.current.lifecycle
   val renderer = remember(context) { FrameRenderer(context) }
-  var fontSize by rememberSaveable { mutableFloatStateOf(DEFAULT_FONT_SP) }
+  var fontSize by rememberSaveable { mutableFloatStateOf(initialFontSize) }
+  val currentOnFontSize by rememberUpdatedState(onFontSizeChanged)
   val box = remember { mutableStateOf(IntSize.Zero) }
   val state = remember(controller, mirror) { CanvasState(renderer, mirror, box) }
-  var blinkOn by remember { mutableStateOf(true) }
+  val blinkOn = rememberBlink(state)
   val currentOnBackground by rememberUpdatedState(onBackground)
+  renderer.font = font
   renderer.fontSize = fontSize
 
-  LaunchedEffect(state, frames) {
-    state.show(controller.frame())
-    frames.collect { state.show(it) }
+  LaunchedEffect(initialFontSize) { fontSize = initialFontSize.coerceIn(FONT_SP_RANGE) }
+  LaunchedEffect(fontSize) {
+    if (fontSize == initialFontSize) return@LaunchedEffect
+    delay(FONT_SAVE_DEBOUNCE_MS)
+    currentOnFontSize(fontSize)
+  }
+  LaunchedEffect(controller, localEcho) { controller.setLocalEcho(localEcho) }
+  LaunchedEffect(state, frames, lifecycle) {
+    lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { frames.collect { state.show(it) } }
   }
   LaunchedEffect(state) {
     snapshotFlow { state.frame?.background }.filterNotNull().collect { currentOnBackground(Color(it.toInt())) }
   }
-  LaunchedEffect(state) {
-    snapshotFlow { state.frame?.cursor?.blinking == true }.collectLatest { blinking ->
-      blinkOn = true
-      while (blinking) {
-        delay(BLINK_MS)
-        blinkOn = !blinkOn
-      }
-    }
-  }
-  // Our grid for this pane; the engine applies it on the server when we own the pane.
-  LaunchedEffect(controller, box.value, fontSize) {
-    val (w, h) = box.value
-    if (w > 0 && h > 0) {
-      val cols = max(MIN_COLS, ((w - renderer.padding * 2) / renderer.cellW).toInt())
-      val rows = max(MIN_ROWS, ((h - renderer.padding * 2) / renderer.cellH).toInt())
-      controller.setViewport(cols, rows, renderer.cellW.roundToInt(), renderer.cellH.roundToInt())
-    }
-  }
+  PublishViewport(controller, box.value, renderer, key = fontSize to font)
 
-  Box(modifier) {
-    Canvas(
-      Modifier
-        .fillMaxSize()
-        .clipToBounds()
-        .onSizeChanged { box.value = it }
-        .selectionGestures(state, controller, onLink = onLink, onTap = onTap)
-        .viewGestures(state, controller, onFontScale = {
-          fontSize = (fontSize * it).coerceIn(FONT_SP_RANGE)
-        }, onSwipePane = onSwipePane),
-    ) {
+  Box(
+    modifier
+      .clipToBounds()
+      .onSizeChanged { box.value = it }
+      .selectionGestures(state, controller, onLink = onLink, onTap = onTap)
+      .viewGestures(state, controller, onFontScale = {
+        fontSize = (fontSize * it).coerceIn(FONT_SP_RANGE)
+      }, onSwipePane = onSwipePane),
+  ) {
+    Canvas(Modifier.fillMaxSize().graphicsLayer()) {
       val f = state.frame
       drawRect(if (f != null) Color(f.background.toInt()) else Colors.bg)
       if (f != null) {
+        drawIntoCanvas { RenderStats.timedDraw { renderer.drawGrid(it.nativeCanvas, f, state.layout()) } }
+      }
+    }
+    Canvas(Modifier.fillMaxSize().graphicsLayer()) {
+      val f = state.frame
+      if (f != null) {
         drawIntoCanvas {
-          renderer.draw(it.nativeCanvas, f, state.layout(), size.width, size.height, focused = true, blinkOn = blinkOn)
+          renderer.drawOverlay(it.nativeCanvas, f, state.layout(), size.width, size.height, true, blinkOn.value)
         }
       }
     }
@@ -152,6 +164,35 @@ fun TerminalCanvas(
       SelectionToolbar(controller, input, onDone = { state.toolbar = false })
     }
   }
+}
+
+/** Our grid for this pane; the engine applies it on the server when we own the pane. [key] changes when cells resize. */
+@Composable
+private fun PublishViewport(controller: TerminalController, box: IntSize, renderer: FrameRenderer, key: Any) {
+  LaunchedEffect(controller, box, key) {
+    val (w, h) = box
+    if (w > 0 && h > 0) {
+      val cols = max(MIN_COLS, ((w - renderer.padding * 2) / renderer.cellW).toInt())
+      val rows = max(MIN_ROWS, ((h - renderer.padding * 2) / renderer.cellH).toInt())
+      controller.setViewport(cols, rows, renderer.cellW.roundToInt(), renderer.cellH.roundToInt())
+    }
+  }
+}
+
+/** Whether a blinking cursor is lit now; stays lit when it doesn't blink. */
+@Composable
+private fun rememberBlink(state: CanvasState): State<Boolean> {
+  val blinkOn = remember { mutableStateOf(true) }
+  LaunchedEffect(state) {
+    snapshotFlow { state.frame?.cursor?.blinking == true }.collectLatest { blinking ->
+      blinkOn.value = true
+      while (blinking) {
+        delay(BLINK_MS)
+        blinkOn.value = !blinkOn.value
+      }
+    }
+  }
+  return blinkOn
 }
 
 /** Geometry and gesture state of one pane view; a new pane or ownership mode starts fresh. */

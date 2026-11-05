@@ -15,6 +15,8 @@ import dev.namnv.rexc.data.TerminalController
 import dev.namnv.rexc.navigation.Terminal
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -22,14 +24,18 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import uniffi.rexc_ffi.Event
 import uniffi.rexc_ffi.Frame
 import uniffi.rexc_ffi.Host
@@ -37,6 +43,8 @@ import uniffi.rexc_ffi.HostStatus
 import uniffi.rexc_ffi.Rexc
 import uniffi.rexc_ffi.RexcException
 import uniffi.rexc_ffi.TerminalInfo
+
+private const val SEARCH_DEBOUNCE_MS = 150L
 
 /**
  * One session on screen: which tab and pane are shown, the open terminal for
@@ -69,7 +77,10 @@ class TerminalViewModel @AssistedInject constructor(
   private val resolved =
     combine(session, selection) { s, sel -> s?.let { resolveSelection(it, sel) } ?: Resolved(null, null) }
 
-  val uiState: StateFlow<TerminalUiState> =
+  private val search = MutableStateFlow<SearchUi?>(null)
+  private var searchJob: Job? = null
+
+  private val layout =
     combine(host, session, resolved, opened, tabOrder) { h, s, r, op, order ->
       val current = op?.takeIf { it.blockId == r.block?.blockId }
       TerminalUiState(
@@ -85,15 +96,29 @@ class TerminalViewModel @AssistedInject constructor(
         gone = h != null && h.status == HostStatus.CONNECTED && s == null && h.sessions.isNotEmpty(),
         paneOrdinal = s?.paneOrdinal(r.block?.blockId) ?: 0,
       )
-    }.stateIn(viewModelScope, WHILE_UI_SUBSCRIBED, TerminalUiState())
+    }
 
-  /** Frames of the current terminal, built off the main thread and conflated to the drawing pace. */
+  val uiState: StateFlow<TerminalUiState> = combine(layout, search) { state, find -> state.copy(search = find) }
+    .stateIn(viewModelScope, WHILE_UI_SUBSCRIBED, TerminalUiState())
+
+  /**
+   * Frames of the current terminal, built off the main thread: one per display frame at most, and
+   * only for rows that changed. Nothing is built while nobody collects (the canvas is off screen).
+   */
   val frames: Flow<Frame> = opened.flatMapLatest { op ->
     if (op == null) {
       emptyFlow()
     } else {
-      repo.terminalEvents(op.controller.id).filterIsInstance<Event.Terminal>().conflate()
-        .mapNotNull { op.controller.frame() }
+      val cache = RowCache()
+      val gate = VsyncGate(dispatchers.mainImmediate)
+      val updates = repo.terminalEvents(op.controller.id).filterIsInstance<Event.Terminal>().map { }
+      merge(flowOf(Unit), updates).conflate()
+        .map {
+          gate.await()
+          RenderStats.timedBuild { cache.next(op.controller::frameSince) }
+        }
+        .filterNotNull()
+        .filter { it.changed }
         .flowOn(dispatchers.default)
     }
   }
@@ -124,6 +149,7 @@ class TerminalViewModel @AssistedInject constructor(
   private suspend fun switchTo(blockId: String?) {
     opened.value?.controller?.close()
     opened.value = null
+    closeSearch(null)
     if (blockId == null) return
     try {
       val id = repo.call { openTerminal(key.hostId, key.sessionId, blockId, false) }
@@ -163,7 +189,36 @@ class TerminalViewModel @AssistedInject constructor(
         call { clearTerminal(key.hostId, key.sessionId, block) }
       }
       is TerminalUiEvent.OpenUrl -> effects.trySend(TerminalEffect.OpenUrl(event.url))
+      is TerminalUiEvent.SearchEvent -> onSearchEvent(event, state.terminal)
     }
+  }
+
+  private fun onSearchEvent(event: TerminalUiEvent.SearchEvent, terminal: TerminalController?) {
+    when (event) {
+      TerminalUiEvent.OpenSearch -> search.update { it ?: SearchUi() }
+      is TerminalUiEvent.SearchQuery -> {
+        search.update { SearchUi(event.query, it?.count ?: 0, it?.current) }
+        searchJob?.cancel()
+        searchJob = viewModelScope.launch {
+          delay(SEARCH_DEBOUNCE_MS)
+          val found = withContext(dispatchers.default) {
+            terminal?.let { it.search(event.query) to it.searchNext(0) } ?: (0 to null)
+          }
+          search.update { if (it?.query == event.query) SearchUi(event.query, found.first, found.second) else it }
+        }
+      }
+      is TerminalUiEvent.SearchNext -> viewModelScope.launch {
+        val at = withContext(dispatchers.default) { terminal?.searchNext(event.delta) }
+        search.update { it?.copy(current = at) }
+      }
+      TerminalUiEvent.CloseSearch -> closeSearch(terminal)
+    }
+  }
+
+  private fun closeSearch(terminal: TerminalController?) {
+    searchJob?.cancel()
+    search.value = null
+    terminal?.searchClear()
   }
 
   private fun onTabEvent(event: TerminalUiEvent.TabEvent, state: TerminalUiState) {
