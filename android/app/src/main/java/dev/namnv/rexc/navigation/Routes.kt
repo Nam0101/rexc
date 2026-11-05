@@ -10,4 +10,10 @@ data object Home : NavKey
 
 /** One session's terminal; [blockId] picks the pane to open, else the focused one. */
 @Serializable
-data class Terminal(val hostId: String, val sessionId: String, val blockId: String? = null) : NavKey
+data class Terminal(val hostId: String, val sessionId: String, val blockId: String? = null) : NavKey {
+  /** Matches the card that opens this terminal with the terminal itself in the shared-element transition. */
+  val sharedKey: String get() = "terminal/$hostId/$sessionId/${blockId.orEmpty()}"
+}
+
+@Serializable
+data object Settings : NavKey

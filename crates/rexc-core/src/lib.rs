@@ -202,6 +202,16 @@ impl Engine {
         Ok(())
     }
 
+    /// Reorder the host list: `host_id` goes just before `before_host_id`, or last when `None`.
+    pub fn move_host(&self, host_id: &str, before_host_id: Option<&str>) -> Result<()> {
+        if !self.store.lock().move_host(host_id, before_host_id) {
+            return Err(EngineError::NoHost);
+        }
+        self.save();
+        self.notifier.hosts();
+        Ok(())
+    }
+
     pub fn connect(&self, host_id: &str) -> Result<()> {
         self.host(host_id)?.send(HostCmd::Connect);
         Ok(())

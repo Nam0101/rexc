@@ -20,6 +20,8 @@ data class HomeUiState(
   val editor: HostEditor? = null,
   /** A host whose "new session" call is in flight. */
   val busyHostId: String? = null,
+  /** Pull-to-refresh is reconnecting every host. */
+  val refreshing: Boolean = false,
 )
 
 @Immutable
@@ -30,6 +32,9 @@ data class HostUi(
   val status: HostStatus,
   val error: String?,
   val sessions: ImmutableList<SessionUi>,
+  val collapsed: Boolean = false,
+  /** The most urgent program state across all sessions, shown when the card is folded. */
+  val state: ProgramState? = null,
 )
 
 @Immutable
@@ -39,9 +44,15 @@ data class SessionUi(
   val tabCount: Int,
   /** The most urgent program state across the session's panes. */
   val state: ProgramState?,
-  /** What is running: program names, else the active tab's name. */
-  val summary: String,
+  /** One chip per tab, most urgent first, capped at [MAX_TAB_CHIPS]. */
+  val tabs: ImmutableList<TabChip>,
+  /** Tabs that did not get a chip. */
+  val hiddenTabs: Int,
 )
+
+/** A tab as a chip: its name and the most urgent state among its panes. */
+@Immutable
+data class TabChip(val id: String, val name: String, val state: ProgramState?)
 
 @Immutable
 data class InboxUi(
@@ -86,6 +97,13 @@ sealed interface HomeUiEvent {
   /** Types [text] and Enter into the item's pane without opening it. */
   data class QuickReply(val item: InboxUi, val text: String) : HomeUiEvent
   data class NewSession(val hostId: String) : HomeUiEvent
+  data class ToggleCollapsed(val hostId: String) : HomeUiEvent
+
+  /** Drops [hostId] just before [beforeHostId], or last when null. */
+  data class MoveHost(val hostId: String, val beforeHostId: String?) : HomeUiEvent
+  data object Refresh : HomeUiEvent
+  data class CloseSession(val hostId: String, val sessionId: String) : HomeUiEvent
+  data class RenameSession(val hostId: String, val sessionId: String, val label: String) : HomeUiEvent
 }
 
 sealed interface HomeEffect {
@@ -96,26 +114,37 @@ sealed interface HomeEffect {
 private val urgency =
   listOf(ProgramState.BLOCKED, ProgramState.ERROR, ProgramState.WORKING, ProgramState.DONE, ProgramState.IDLE)
 
-fun Host.toUi(): HostUi = HostUi(
-  id = hostId,
-  name = name,
-  address = address,
-  status = status,
-  error = error,
-  sessions = sessions.map { it.toUi() }.toImmutableList(),
-)
+const val MAX_TAB_CHIPS = 6
+
+/** Lower is more urgent; no state at all comes last. */
+private fun rank(state: ProgramState?): Int = urgency.indexOf(state).let { if (it < 0) urgency.size else it }
+
+private fun Iterable<ProgramState?>.mostUrgent(): ProgramState? = filterNotNull().minByOrNull(::rank)
+
+fun Host.toUi(collapsed: Boolean = false): HostUi {
+  val ui = sessions.map { it.toUi() }
+  return HostUi(
+    id = hostId,
+    name = name,
+    address = address,
+    status = status,
+    error = error,
+    sessions = ui.toImmutableList(),
+    collapsed = collapsed,
+    state = ui.map { it.state }.mostUrgent(),
+  )
+}
 
 fun Session.toUi(): SessionUi {
-  val blocks = windows.flatMap { it.blocks }
-  val state = blocks.mapNotNull { it.state }.minByOrNull { urgency.indexOf(it) }
-  val apps = blocks.filter { it.state != null && it.state != ProgramState.IDLE }.mapNotNull { it.app }.distinct()
-  val active = windows.firstOrNull { it.windowId == activeWindowId } ?: windows.firstOrNull()
+  val chips = windows.map { w -> TabChip(w.windowId, w.displayName, w.blocks.map { it.state }.mostUrgent()) }
+    .sortedBy { rank(it.state) }
   return SessionUi(
     id = sessionId,
     label = label,
     tabCount = windows.size,
-    state = state,
-    summary = if (apps.isNotEmpty()) apps.joinToString(" · ") else active?.displayName.orEmpty(),
+    state = chips.map { it.state }.mostUrgent(),
+    tabs = chips.take(MAX_TAB_CHIPS).toImmutableList(),
+    hiddenTabs = (chips.size - MAX_TAB_CHIPS).coerceAtLeast(0),
   )
 }
 

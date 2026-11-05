@@ -10,6 +10,7 @@ import dev.namnv.rexc.data.EngineRepository
 import dev.namnv.rexc.navigation.Terminal
 import javax.inject.Inject
 import kotlinx.collections.immutable.toImmutableList
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -21,6 +22,7 @@ import uniffi.rexc_ffi.InboxItem
 import uniffi.rexc_ffi.RexcException
 
 private const val PREVIEW_LINES = 4u
+private const val REFRESH_SPINNER_MS = 700L
 
 /** Owns the home list: hosts, their sessions, the inbox, and the add/edit host sheet. */
 @HiltViewModel
@@ -30,6 +32,9 @@ class HomeViewModel @Inject constructor(private val repo: EngineRepository) :
   private data class Local(
     val editor: HostEditor? = null,
     val busyHostId: String? = null,
+    val refreshing: Boolean = false,
+    /** Host cards the user folded. */
+    val collapsed: Set<String> = emptySet(),
     /** Block ids with a quick reply in flight. */
     val sending: Set<String> = emptySet(),
   )
@@ -45,12 +50,13 @@ class HomeViewModel @Inject constructor(private val repo: EngineRepository) :
 
   val uiState: StateFlow<HomeUiState> = combine(repo.hosts, repo.inbox, local, previews) { hosts, inbox, l, p ->
     HomeUiState(
-      hosts = hosts.map { it.toUi() }.toImmutableList(),
+      hosts = hosts.map { it.toUi(collapsed = it.hostId in l.collapsed) }.toImmutableList(),
       inbox = inbox.map {
         it.toUi().copy(preview = p[it.blockId]?.text, sending = it.blockId in l.sending)
       }.toImmutableList(),
       editor = l.editor,
       busyHostId = l.busyHostId,
+      refreshing = l.refreshing,
     )
   }.stateIn(viewModelScope, WHILE_UI_SUBSCRIBED, HomeUiState())
 
@@ -88,6 +94,28 @@ class HomeViewModel @Inject constructor(private val repo: EngineRepository) :
 
   fun onEvent(event: HomeUiEvent) {
     when (event) {
+      HomeUiEvent.AddHostClicked, is HomeUiEvent.EditHostClicked, is HomeUiEvent.EditorChanged,
+      HomeUiEvent.SaveHost, HomeUiEvent.DismissEditor,
+      -> onEditorEvent(event)
+      is HomeUiEvent.RemoveHost -> run { repo.call { removeHost(event.hostId) } }
+      is HomeUiEvent.Connect -> run { repo.call { connect(event.hostId) } }
+      is HomeUiEvent.Disconnect -> run { repo.call { disconnect(event.hostId) } }
+      is HomeUiEvent.OpenSession -> effects.trySend(HomeEffect.OpenTerminal(Terminal(event.hostId, event.sessionId)))
+      is HomeUiEvent.OpenInbox -> effects.trySend(
+        HomeEffect.OpenTerminal(Terminal(event.item.hostId, event.item.sessionId, event.item.blockId)),
+      )
+      is HomeUiEvent.NewSession -> newSession(event.hostId)
+      is HomeUiEvent.QuickReply -> quickReply(event.item, event.text)
+      is HomeUiEvent.ToggleCollapsed -> toggleCollapsed(event.hostId)
+      is HomeUiEvent.MoveHost -> run { repo.call { moveHost(event.hostId, event.beforeHostId) } }
+      HomeUiEvent.Refresh -> refresh()
+      is HomeUiEvent.CloseSession -> run { repo.call { destroySession(event.hostId, event.sessionId) } }
+      is HomeUiEvent.RenameSession -> renameSession(event)
+    }
+  }
+
+  private fun onEditorEvent(event: HomeUiEvent) {
+    when (event) {
       HomeUiEvent.AddHostClicked -> local.update { it.copy(editor = HostEditor(null, "", "")) }
       is HomeUiEvent.EditHostClicked -> viewModelScope.launch {
         val record = repo.call { hosts().firstOrNull { it.hostId == event.hostId } } ?: return@launch
@@ -107,15 +135,27 @@ class HomeViewModel @Inject constructor(private val repo: EngineRepository) :
       }
       HomeUiEvent.SaveHost -> saveHost()
       HomeUiEvent.DismissEditor -> local.update { it.copy(editor = null) }
-      is HomeUiEvent.RemoveHost -> run { repo.call { removeHost(event.hostId) } }
-      is HomeUiEvent.Connect -> run { repo.call { connect(event.hostId) } }
-      is HomeUiEvent.Disconnect -> run { repo.call { disconnect(event.hostId) } }
-      is HomeUiEvent.OpenSession -> effects.trySend(HomeEffect.OpenTerminal(Terminal(event.hostId, event.sessionId)))
-      is HomeUiEvent.OpenInbox -> effects.trySend(
-        HomeEffect.OpenTerminal(Terminal(event.item.hostId, event.item.sessionId, event.item.blockId)),
-      )
-      is HomeUiEvent.NewSession -> newSession(event.hostId)
-      is HomeUiEvent.QuickReply -> quickReply(event.item, event.text)
+      else -> Unit
+    }
+  }
+
+  private fun toggleCollapsed(hostId: String) = local.update {
+    it.copy(collapsed = if (hostId in it.collapsed) it.collapsed - hostId else it.collapsed + hostId)
+  }
+
+  private fun renameSession(event: HomeUiEvent.RenameSession) {
+    val label = event.label.trim().ifEmpty { return }
+    run { repo.call { renameSession(event.hostId, event.sessionId, label) } }
+  }
+
+  /** Pull-to-refresh: ask every host to (re)connect; the spinner just confirms the request went out. */
+  private fun refresh() {
+    if (local.value.refreshing) return
+    local.update { it.copy(refreshing = true) }
+    viewModelScope.launch {
+      repo.call { connectAll() }
+      delay(REFRESH_SPINNER_MS)
+      local.update { it.copy(refreshing = false) }
     }
   }
 
