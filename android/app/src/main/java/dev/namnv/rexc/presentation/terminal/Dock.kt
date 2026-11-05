@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -49,9 +50,13 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.namnv.rexc.core.ui.theme.Colors
 import dev.namnv.rexc.core.ui.theme.MonoFamily
 import dev.namnv.rexc.core.ui.theme.Space
+import dev.namnv.rexc.data.DockAction
+import dev.namnv.rexc.data.DockItem
 import kotlin.math.abs
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -63,9 +68,11 @@ private const val REPEAT_EVERY_MS = 110L
 private const val CHORD_COLUMNS = 5
 
 /**
- * The key row under the grid: the keys a phone keyboard lacks. Ctrl and Alt
- * latch for the next key (long press locks; long press Ctrl opens chords),
- * the arrows key is a joystick you hold and slide.
+ * The key row under the grid: the keys a phone keyboard lacks, snippets, and
+ * shortcuts to the sheets. The row is the user's own ([DockLayout]); long press
+ * a gap or a plain key to edit it. Ctrl and Alt latch for the next key (long
+ * press locks; long press Ctrl opens chords), the arrows key is a joystick you
+ * hold and slide.
  */
 @Composable
 fun Dock(
@@ -74,46 +81,94 @@ fun Dock(
   onToggleKeyboard: () -> Unit,
   background: Color,
   modifier: Modifier = Modifier,
+  hapticsEnabled: Boolean = true,
+  onOpenSheet: (TerminalSheet) -> Unit = {},
 ) {
+  val viewModel: DockViewModel = hiltViewModel()
+  val layout by viewModel.layout.collectAsStateWithLifecycle()
+  var editing by remember { mutableStateOf(false) }
+  val haptics = LocalHapticFeedback.current
+  val edit = {
+    if (hapticsEnabled) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+    editing = true
+  }
   val ink = remember(background) { onColor(background) }
-  CompositionLocalProvider(LocalDockInk provides ink) {
+  CompositionLocalProvider(LocalDockInk provides ink, LocalDockHaptics provides hapticsEnabled) {
     Row(
       modifier.fillMaxWidth().background(background)
         .drawBehind { drawLine(ink.copy(alpha = HAIRLINE), Offset.Zero, Offset(size.width, 0f)) }
+        .pointerInput(Unit) { detectTapGestures(onLongPress = { edit() }) }
         .horizontalScroll(rememberScrollState())
         .padding(horizontal = Space.s, vertical = Space.s),
       horizontalArrangement = Arrangement.spacedBy(6.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      Key("esc") { input.key("escape") }
-      Key("tab") { input.key("tab") }
-      CtrlKey(input)
-      ModKey(
+      layout.items.forEach { item ->
+        DockCap(item, input, keyboardVisible, onToggleKeyboard, onOpenSheet, edit)
+      }
+    }
+  }
+  if (editing) {
+    DockEditor(layout, onSave = viewModel::save, onReset = viewModel::reset, onDismiss = { editing = false })
+  }
+}
+
+@Composable
+private fun DockCap(
+  item: DockItem,
+  input: TerminalInput,
+  keyboardVisible: Boolean,
+  onToggleKeyboard: () -> Unit,
+  onOpenSheet: (TerminalSheet) -> Unit,
+  onEdit: () -> Unit,
+) {
+  when (item) {
+    is DockItem.Key -> Key(item.label, onEdit) { input.key(item.name, item.ctrl, item.alt, item.shift) }
+    is DockItem.Text -> Key(item.label, onEdit) { sendSnippet(input, item.text, item.enter) }
+    is DockItem.Action -> when (DockAction.of(item.id)) {
+      DockAction.CTRL -> CtrlKey(input)
+      DockAction.ALT -> ModKey(
         "alt",
         active = input.alt,
         locked = input.altLocked,
         onClick = input::toggleAlt,
         onLongClick = input::lockAlt,
       )
-      ModKey("⇧", active = input.shift, locked = false, onClick = input::toggleShift, onLongClick = input::toggleShift)
-      ArrowsKey(input)
-      Key("-") { input.raw("-") }
-      Key("|") { input.raw("|") }
-      Key("/") { input.raw("/") }
-      Key("~") { input.raw("~") }
-      Key("`") { input.raw("`") }
-      Key("home") { input.key("home") }
-      Key("end") { input.key("end") }
-      Key("pgup") { input.key("page_up") }
-      Key("pgdn") { input.key("page_down") }
-      IconKey(Icons.Default.ContentPaste, "Paste") { input.paste() }
-      IconKey(if (keyboardVisible) Icons.Default.KeyboardHide else Icons.Default.Keyboard, "Keyboard", onToggleKeyboard)
+      DockAction.SHIFT ->
+        ModKey(
+          "⇧",
+          active = input.shift,
+          locked = false,
+          onClick = input::toggleShift,
+          onLongClick = input::toggleShift,
+        )
+      DockAction.ARROWS -> ArrowsKey(input)
+      DockAction.PASTE -> IconKey(Icons.Default.ContentPaste, "Paste") { input.paste() }
+      DockAction.KEYBOARD -> IconKey(
+        if (keyboardVisible) Icons.Default.KeyboardHide else Icons.Default.Keyboard,
+        "Keyboard",
+        onToggleKeyboard,
+      )
+      DockAction.PALETTE -> Key("⌘", onEdit) { onOpenSheet(TerminalSheet.PALETTE) }
+      DockAction.SWITCHER -> Key("⇄", onEdit) { onOpenSheet(TerminalSheet.SWITCHER) }
+      DockAction.MAP -> Key("▦", onEdit) { onOpenSheet(TerminalSheet.MAP) }
+      null -> Unit
     }
   }
 }
 
+/** A snippet is typed as is: sticky modifiers do not turn it into chords, and a new line is Enter. */
+internal fun sendSnippet(input: TerminalInput, text: String, enter: Boolean) {
+  text.split('\n').forEachIndexed { i, line ->
+    if (i > 0) input.key("enter")
+    if (line.isNotEmpty()) input.raw(line)
+  }
+  if (enter) input.key("enter")
+}
+
 /** Ink for the dock's keys, derived from the terminal background so the dock sits on any theme. */
 private val LocalDockInk = compositionLocalOf { Color.Unspecified }
+private val LocalDockHaptics = compositionLocalOf { true }
 private const val KEY_TINT = 0.1f
 private const val HAIRLINE = 0.08f
 
@@ -134,16 +189,26 @@ private fun KeyBox(active: Boolean, modifier: Modifier = Modifier, content: @Com
 @Composable
 private fun tap(onClick: () -> Unit): () -> Unit {
   val haptics = LocalHapticFeedback.current
+  val enabled = LocalDockHaptics.current
   return {
-    haptics.performHapticFeedback(HapticFeedbackType.VirtualKey)
+    if (enabled) haptics.performHapticFeedback(HapticFeedbackType.VirtualKey)
     onClick()
   }
 }
 
+/** A plain key; [onLongClick] is where a long press goes (the dock editor), if anywhere. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Key(label: String, onClick: () -> Unit) {
-  KeyBox(active = false, Modifier.combinedClickable(onClick = tap(onClick))) {
-    Text(label, fontFamily = MonoFamily, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = LocalDockInk.current)
+private fun Key(label: String, onLongClick: (() -> Unit)? = null, onClick: () -> Unit) {
+  KeyBox(active = false, Modifier.combinedClickable(onClick = tap(onClick), onLongClick = onLongClick)) {
+    Text(
+      label,
+      fontFamily = MonoFamily,
+      fontSize = 14.sp,
+      fontWeight = FontWeight.Medium,
+      color = LocalDockInk.current,
+      maxLines = 1,
+    )
   }
 }
 
@@ -245,6 +310,7 @@ private fun ChordSheet(input: TerminalInput, onPick: () -> Unit) {
 private fun ArrowsKey(input: TerminalInput) {
   val scope = rememberCoroutineScope()
   val haptics = LocalHapticFeedback.current
+  val hapticsEnabled = LocalDockHaptics.current
   val send by rememberUpdatedState<(String) -> Unit> { input.key("arrow_$it") }
   var active by remember { mutableStateOf(false) }
   var direction by remember { mutableStateOf<String?>(null) }
@@ -267,7 +333,7 @@ private fun ArrowsKey(input: TerminalInput) {
             repeating?.cancel()
             direction = next
             if (next != null) {
-              haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+              if (hapticsEnabled) haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
               send(next)
               repeating = scope.launch { repeatKey { send(next) } }
             }

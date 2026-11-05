@@ -93,6 +93,22 @@ impl From<core::ProgramState> for ProgramState {
     }
 }
 
+/// A server action for the command palette.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct ServerAction {
+    pub name: String,
+    pub title: String,
+    pub description: String,
+    pub category: String,
+    pub keywords: String,
+}
+
+impl From<core::Action> for ServerAction {
+    fn from(a: core::Action) -> Self {
+        Self { name: a.name, title: a.title, description: a.description, category: a.category, keywords: a.keywords }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct Program {
     pub id: String,
@@ -661,6 +677,16 @@ impl Rexc {
     /// The last `lines` non-blank lines of a pane's screen, as plain text.
     pub fn block_preview(&self, host_id: String, session_id: String, block_id: String, lines: u32) -> Result<String> {
         Ok(self.engine.block_preview(&host_id, &session_id, &block_id, lines as usize)?)
+    }
+
+    /// The server's actions for the command palette.
+    pub fn actions(&self, host_id: String) -> Result<Vec<ServerAction>> {
+        Ok(self.engine.actions(&host_id)?.into_iter().map(Into::into).collect())
+    }
+
+    /// Run a server action on `block_id`, or the session's focused pane when `None`.
+    pub fn run_action(&self, host_id: String, session_id: String, block_id: Option<String>, action: String) -> Result<()> {
+        Ok(self.engine.run_action(&host_id, &session_id, block_id.as_deref(), &action)?)
     }
 
     pub fn new_session(&self, host_id: String, label: Option<String>) -> Result<String> {
