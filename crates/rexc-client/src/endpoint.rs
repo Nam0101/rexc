@@ -3,8 +3,8 @@
 //!
 //! Address rules (so adding a host is one field): a `.ts.net` name, a
 //! `100.64/10` address or a Tailscale IPv6 address is a tailnet host, reached
-//! with TLS on 443; anything else is plaintext on Rex's own port 7297. An
-//! explicit scheme or port wins. `unix:/path` or an absolute path is a local
+//! with TLS, on 443 unless a port is given; anything else is plaintext on Rex's
+//! own port 7297. An explicit scheme wins. `unix:/path` or an absolute path is a local
 //! socket, which the desktop tools use.
 
 use std::path::PathBuf;
@@ -69,7 +69,8 @@ impl Endpoint {
         let tailnet = is_tailnet(&host);
         let tls = match (scheme, explicit_port) {
             (Some(s), _) => s == "https" || s == "wss",
-            (None, Some(p)) => p == TLS_PORT,
+            // Rex's tailnet servers speak TLS on whatever port they use; `http://` says otherwise.
+            (None, Some(p)) => tailnet || p == TLS_PORT,
             (None, None) => tailnet,
         };
         let port = explicit_port.unwrap_or(if tls { TLS_PORT } else { PLAIN_PORT });
@@ -234,7 +235,9 @@ mod tests {
         assert_eq!(Endpoint::parse("my-mac.tail1234.ts.net").unwrap(), tcp("my-mac.tail1234.ts.net", 443, true));
         assert_eq!(Endpoint::parse("https://my-mac.tail1234.ts.net/").unwrap(), tcp("my-mac.tail1234.ts.net", 443, true));
         assert_eq!(Endpoint::parse("100.64.0.7").unwrap(), tcp("100.64.0.7", 443, true));
-        assert_eq!(Endpoint::parse("100.64.0.7:7297").unwrap(), tcp("100.64.0.7", 7297, false));
+        assert_eq!(Endpoint::parse("100.64.0.7:7297").unwrap(), tcp("100.64.0.7", 7297, true));
+        assert_eq!(Endpoint::parse("box.tail1234.ts.net:7297").unwrap(), tcp("box.tail1234.ts.net", 7297, true));
+        assert_eq!(Endpoint::parse("http://100.64.0.7:7297").unwrap(), tcp("100.64.0.7", 7297, false));
         assert_eq!(Endpoint::parse("http://box:443").unwrap(), tcp("box", 443, false));
         assert_eq!(Endpoint::parse("[fd7a:115c:a1e0::1]").unwrap(), tcp("fd7a:115c:a1e0::1", 443, true));
         assert_eq!(Endpoint::parse("unix:///tmp/a%20b.sock").unwrap(), Endpoint::Unix("/tmp/a b.sock".into()));
