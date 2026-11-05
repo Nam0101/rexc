@@ -623,6 +623,9 @@ impl Rexc {
     pub fn remove_host(&self, host_id: String) -> Result<()> {
         Ok(self.engine.remove_host(&host_id)?)
     }
+    pub fn move_host(&self, host_id: String, before_host_id: Option<String>) -> Result<()> {
+        Ok(self.engine.move_host(&host_id, before_host_id.as_deref())?)
+    }
     pub fn connect(&self, host_id: String) -> Result<()> {
         Ok(self.engine.connect(&host_id)?)
     }

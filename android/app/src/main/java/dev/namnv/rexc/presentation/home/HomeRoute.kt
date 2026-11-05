@@ -12,7 +12,7 @@ import dev.namnv.rexc.presentation.common.CollectSideEffect
 
 /** Stateful host for the home list; maps effects to navigation and messages. */
 @Composable
-fun HomeRoute(onOpenTerminal: (Terminal) -> Unit, modifier: Modifier = Modifier) {
+fun HomeRoute(onOpenTerminal: (Terminal) -> Unit, onOpenSettings: () -> Unit, modifier: Modifier = Modifier) {
   val viewModel: HomeViewModel = hiltViewModel()
   val state by viewModel.uiState.collectAsStateWithLifecycle()
   val snackbar = remember { SnackbarHostState() }
@@ -22,5 +22,11 @@ fun HomeRoute(onOpenTerminal: (Terminal) -> Unit, modifier: Modifier = Modifier)
       is HomeEffect.Message -> snackbar.showSnackbar(effect.text)
     }
   }
-  HomeScreen(state = state, snackbar = snackbar, onEvent = viewModel::onEvent, modifier = modifier)
+  HomeScreen(
+    state = state,
+    snackbar = snackbar,
+    onEvent = viewModel::onEvent,
+    onOpenSettings = onOpenSettings,
+    modifier = modifier,
+  )
 }

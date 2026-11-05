@@ -60,6 +60,29 @@ impl Store {
     pub fn host_mut(&mut self, id: &str) -> Option<&mut HostRecord> {
         self.hosts.iter_mut().find(|h| h.id == id)
     }
+
+    /// Put `id` just before `before` (the end when `None`). False when either id is unknown.
+    pub fn move_host(&mut self, id: &str, before: Option<&str>) -> bool {
+        let Some(from) = self.hosts.iter().position(|h| h.id == id) else { return false };
+        if before == Some(id) {
+            return true;
+        }
+        let record = self.hosts.remove(from);
+        let to = match before {
+            None => Some(self.hosts.len()),
+            Some(b) => self.hosts.iter().position(|h| h.id == b),
+        };
+        match to {
+            Some(to) => {
+                self.hosts.insert(to, record);
+                true
+            }
+            None => {
+                self.hosts.insert(from, record);
+                false
+            }
+        }
+    }
 }
 
 /// A short random id that is safe in file names and JSON.
@@ -84,5 +107,37 @@ mod tests {
         assert_eq!(back, s);
         assert!(!Store::path(&dir).with_extension("json.tmp").exists());
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    fn store_of(ids: &[&str]) -> Store {
+        let hosts = ids
+            .iter()
+            .map(|id| HostRecord { id: id.to_string(), name: id.to_string(), address: String::new(), last: LastPosition::default(), background_alerts: false })
+            .collect();
+        Store { hosts }
+    }
+
+    fn order(s: &Store) -> Vec<&str> {
+        s.hosts.iter().map(|h| h.id.as_str()).collect()
+    }
+
+    #[test]
+    fn moves_a_host_before_another_or_to_the_end() {
+        let mut s = store_of(&["a", "b", "c"]);
+        assert!(s.move_host("c", Some("a")));
+        assert_eq!(order(&s), ["c", "a", "b"]);
+        assert!(s.move_host("c", None));
+        assert_eq!(order(&s), ["a", "b", "c"]);
+        assert!(s.move_host("a", Some("c")));
+        assert_eq!(order(&s), ["b", "a", "c"]);
+    }
+
+    #[test]
+    fn move_host_leaves_the_order_alone_on_unknown_ids_or_itself() {
+        let mut s = store_of(&["a", "b"]);
+        assert!(!s.move_host("zzz", None));
+        assert!(!s.move_host("b", Some("zzz")));
+        assert!(s.move_host("b", Some("b")));
+        assert_eq!(order(&s), ["a", "b"]);
     }
 }

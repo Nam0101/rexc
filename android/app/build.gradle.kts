@@ -109,6 +109,7 @@ dependencies {
   debugImplementation(libs.compose.ui.tooling)
   implementation(libs.androidx.core.ktx)
   implementation(libs.androidx.activity.compose)
+  implementation(libs.androidx.datastore.preferences)
   implementation(libs.androidx.lifecycle.runtime.compose)
   implementation(libs.androidx.lifecycle.viewmodel.compose)
   implementation(libs.androidx.lifecycle.viewmodel.navigation3)
