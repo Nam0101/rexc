@@ -8,7 +8,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalView
 import dev.namnv.rexc.core.ui.theme.Colors
 
-/** Asks before a pane goes away, when the "confirm before closing a pane" setting is on. */
+/** Asks before a pane (or a whole tab of them) goes away, when the "confirm before closing a pane" setting is on. */
 @Composable
 fun ClosePaneDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
   AlertDialog(
@@ -27,7 +27,8 @@ fun ClosePaneDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
 }
 
 /** The events that remove a pane and so deserve the confirmation. */
-fun TerminalUiEvent.closesPane(): Boolean = this is TerminalUiEvent.ClosePane || this is TerminalUiEvent.CloseBlock
+fun TerminalUiEvent.closesPane(): Boolean =
+  this is TerminalUiEvent.ClosePane || this is TerminalUiEvent.CloseBlock || this is TerminalUiEvent.CloseTab
 
 /** [onEvent] for everything, except that pane-closing events go to [onAsk] first when [confirm] is on. */
 fun guardClose(

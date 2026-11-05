@@ -20,6 +20,10 @@
         android:theme="@style/Theme.Rexc"
         android:networkSecurityConfig="@xml/network_security"
         android:enableOnBackInvokedCallback="true">
+    <!-- Pull the Play Services QR scanner module at install, so the first scan does not wait. -->
+    <meta-data
+      android:name="com.google.mlkit.vision.DEPENDENCIES"
+      android:value="barcode_ui" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

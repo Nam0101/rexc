@@ -124,6 +124,7 @@ dependencies {
   implementation(libs.dagger.hilt.android)
   ksp(libs.dagger.hilt.compiler)
   implementation(libs.timber)
+  implementation(libs.play.services.code.scanner)
   implementation(libs.androidx.profileinstaller)
   baselineProfile(project(":baselineprofile"))
   implementation("${libs.jna.get()}@aar")

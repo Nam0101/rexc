@@ -16,6 +16,7 @@ rexc-client.workspace = true
 rexc-core.workspace = true
 
 serde_json.workspace = true
+qrcode = { version = "0.14", default-features = false }
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

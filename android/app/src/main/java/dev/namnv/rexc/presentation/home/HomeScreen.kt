@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
@@ -119,8 +120,7 @@ fun HomeScreen(
         item(key = "header") { Header(onAdd = { onEvent(HomeUiEvent.AddHostClicked) }, onOpenSettings) }
         batteryItem(state.batteryHint, onEvent)
         if (state.inbox.isNotEmpty()) {
-          item(key = "inbox-title") { SectionTitle("Inbox") }
-          items(state.inbox, key = { "${it.hostId}/${it.blockId}" }) { item -> InboxCard(item, onEvent) }
+          item(key = "needs-you") { NeedsYou(state.inbox, onEvent) }
         }
         if (hosts.isEmpty()) {
           item(key = "empty") { EmptyState { onEvent(HomeUiEvent.AddHostClicked) } }
@@ -192,6 +192,21 @@ private fun Header(onAdd: () -> Unit, onOpenSettings: () -> Unit) {
       Icon(Icons.Default.Settings, contentDescription = "Settings", tint = Colors.muted)
     }
     IconButton(onClick = onAdd) { Icon(Icons.Default.Add, contentDescription = "Add server", tint = Colors.accent) }
+  }
+}
+
+/** The programs waiting on you, grouped in one card above the hosts. */
+@Composable
+private fun NeedsYou(items: List<InboxUi>, onEvent: (HomeUiEvent) -> Unit) {
+  Column {
+    SectionTitle("Needs you")
+    Spacer(Modifier.height(Space.s))
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.card)).background(Colors.surface)) {
+      items.forEachIndexed { i, item ->
+        if (i > 0) HorizontalDivider(color = Colors.line, modifier = Modifier.padding(horizontal = Space.l))
+        InboxCard(item, onEvent)
+      }
+    }
   }
 }
 

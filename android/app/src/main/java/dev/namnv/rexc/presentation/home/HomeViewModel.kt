@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import uniffi.rexc_ffi.InboxItem
+import uniffi.rexc_ffi.ProgramState
 import uniffi.rexc_ffi.RexcException
 
 private const val PREVIEW_LINES = 4u
@@ -58,8 +59,8 @@ class HomeViewModel @Inject constructor(private val repo: EngineRepository) :
     repo.needsBatteryExemption,
   ) { hosts, inbox, l, p, battery ->
     HomeUiState(
-      hosts = hosts.map { it.toUi(collapsed = it.hostId in l.collapsed) }.toImmutableList(),
-      inbox = inbox.map {
+      hosts = hosts.map { it.toUi(collapsed = it.hostId in l.collapsed, inbox = inbox) }.toImmutableList(),
+      inbox = inbox.filter { it.state.needsYou() }.map {
         it.toUi().copy(preview = p[it.blockId]?.text, sending = it.blockId in l.sending)
       }.toImmutableList(),
       editor = l.editor,
@@ -73,8 +74,9 @@ class HomeViewModel @Inject constructor(private val repo: EngineRepository) :
     viewModelScope.launch { repo.inbox.collect { items -> refreshPreviews(items) } }
   }
 
-  /** Fetches a preview for every inbox item whose status moved on; drops the ones that left. */
-  private fun refreshPreviews(items: List<InboxItem>) {
+  /** Fetches a preview for every blocked program whose status moved on; drops the ones that left. */
+  private fun refreshPreviews(all: List<InboxItem>) {
+    val items = all.filter { it.state == ProgramState.BLOCKED }
     val wanted = items.associateBy { it.blockId }
     previews.update { old -> old.filterKeys { it in wanted } }
     for (item in items) {

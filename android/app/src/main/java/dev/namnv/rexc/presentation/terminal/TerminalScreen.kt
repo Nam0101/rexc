@@ -329,31 +329,30 @@ private fun TopBar(
     verticalAlignment = Alignment.CenterVertically,
   ) {
     IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = onBg) }
-    Column(Modifier.weight(1f)) {
+    // One line: host dot, session name, then the host in muted ink; the grid size lives in the pane map.
+    Box(
+      Modifier.size(
+        6.dp,
+      ).clip(CircleShape).background(if (state.hostStatus == HostStatus.CONNECTED) Colors.ok else Colors.amber),
+    )
+    Spacer(Modifier.width(Space.s))
+    Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
       Text(
-        state.sessionLabel.ifBlank {
-          "Session"
-        },
+        state.sessionLabel.ifBlank { "Session" },
         color = onBg,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 16.sp,
+        fontSize = 15.sp,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.weight(1f, fill = false),
       )
-      Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(
-          Modifier.size(
-            6.dp,
-          ).clip(CircleShape).background(if (state.hostStatus == HostStatus.CONNECTED) Colors.ok else Colors.amber),
-        )
-        Spacer(Modifier.width(6.dp))
-        Text(
-          listOfNotNull(state.hostName, state.info?.let { "${it.cols}×${it.rows}" }).joinToString(" · "),
-          color = onBg.copy(alpha = 0.6f),
-          fontSize = 12.sp,
-          maxLines = 1,
-        )
+      state.hostName?.let {
+        Spacer(Modifier.width(Space.s))
+        Text(it, color = onBg.copy(alpha = MUTED_INK), fontSize = 12.sp, maxLines = 1)
       }
+    }
+    IconButton(onClick = { onSheet(TerminalSheet.PALETTE) }) {
+      Text("⌘", color = onBg, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
     }
     PaneMenu(state, tint = onBg, onEvent = onEvent, onRename = onRename, onCopyScreen = onCopyScreen, onSheet = onSheet)
   }
@@ -375,23 +374,13 @@ private fun PaneMenu(
   }
   Box {
     IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, contentDescription = "Menu", tint = tint) }
+    // Only what the palette (⌘) does not cover better: the frequent few and the destructive ones.
     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-      MenuEntry("Command palette") { pick { onSheet(TerminalSheet.PALETTE) } }
-      MenuEntry("Quick switcher") { pick { onSheet(TerminalSheet.SWITCHER) } }
-      MenuEntry("Pane map") { pick { onSheet(TerminalSheet.MAP) } }
-      MenuEntry("New tab") { pick { onEvent(TerminalUiEvent.NewTab) } }
-      MenuEntry("Split right") { pick { onEvent(TerminalUiEvent.Split(false)) } }
-      MenuEntry("Split down") { pick { onEvent(TerminalUiEvent.Split(true)) } }
-      when (state.info?.ownedByMe) {
-        true -> MenuEntry("Release to desktop") { pick { onEvent(TerminalUiEvent.Release) } }
-        false -> MenuEntry("Take over size") { pick { onEvent(TerminalUiEvent.TakeOver) } }
-        null -> Unit
-      }
-      MenuEntry("Copy screen") { pick(onCopyScreen) }
       MenuEntry("Find") { pick { onEvent(TerminalUiEvent.OpenSearch) } }
+      MenuEntry("Copy screen") { pick(onCopyScreen) }
+      MenuEntry("Pane map") { pick { onSheet(TerminalSheet.MAP) } }
       MenuEntry("Rename tab") { pick { onRename(Rename.TAB) } }
       MenuEntry("Rename session") { pick { onRename(Rename.SESSION) } }
-      MenuEntry("Clear screen") { pick { onEvent(TerminalUiEvent.Clear) } }
       MenuEntry("Close pane", color = Colors.danger) { pick { onEvent(TerminalUiEvent.ClosePane) } }
       if (state.tabs.size > 1) {
         MenuEntry("Close tab", color = Colors.danger) { pick { onEvent(TerminalUiEvent.CloseTab) } }
@@ -435,7 +424,7 @@ private fun PaneStrip(state: TerminalUiState, ink: Color, onEvent: (TerminalUiEv
   }
 }
 
-/** A tab pill; tinted from the terminal's own background so it sits on any theme. */
+/** A tab pill, tinted from the terminal's own background so it sits on any theme; the chosen one is a shade darker. */
 @Composable
 internal fun Chip(
   selected: Boolean,
@@ -446,9 +435,9 @@ internal fun Chip(
 ) {
   Row(
     modifier.clip(RoundedCornerShape(Radius.chip))
-      .background(if (selected) Colors.accent else ink.copy(alpha = CHROME_TINT))
+      .background(ink.copy(alpha = if (selected) SELECTED_TINT else CHROME_TINT))
       .clickable(onClick = onClick)
-      .padding(horizontal = Space.m, vertical = 6.dp),
+      .padding(horizontal = Space.m, vertical = 5.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) { content() }
 }
@@ -507,7 +496,8 @@ private fun StatusOverlay(state: TerminalUiState, onEvent: (TerminalUiEvent) -> 
 }
 
 private const val LIGHT_BACKGROUND_LUMINANCE = 0.5f
-private const val CHROME_TINT = 0.1f
+private const val CHROME_TINT = 0.08f
+private const val SELECTED_TINT = 0.2f
 private const val MUTED_INK = 0.6f
 private const val HAIRLINE = 0.08f
 private const val DOTS_MS = 1_200L

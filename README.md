@@ -11,3 +11,13 @@ An Android client for the [Rex](https://rex.app) terminal multiplexer: your desk
 Rust for Android needs zig (libghostty) and the NDK: `scripts/build-android.sh` produces `librexc_ffi.so` and the Kotlin bindings, then `cd android && ./gradlew assembleDebug`. `scripts/m4.sh` runs the same on a remote build machine.
 
 Quality gates: `cargo test --workspace`, `./gradlew spotlessCheck detekt testDebugUnitTest`.
+
+## Adding a server from the desktop
+
+On the machine that runs Rex, print a code with the address the phone should use (tailnet name or `host:port`), then tap the scan icon in the app's "Add server" sheet:
+
+```sh
+rexc qr my-mac.tail1234.ts.net "my mac"
+```
+
+Any QR code whose text is just an address works too.

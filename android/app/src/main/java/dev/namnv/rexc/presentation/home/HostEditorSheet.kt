@@ -9,8 +9,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
@@ -18,9 +22,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
@@ -40,20 +47,7 @@ internal fun HostEditorSheet(editor: HostEditor, onEvent: (HomeUiEvent) -> Unit)
         color = Colors.ink,
       )
       Spacer(Modifier.height(Space.l))
-      OutlinedTextField(
-        value = editor.address,
-        onValueChange = { onEvent(HomeUiEvent.EditorChanged(editor.name, it, editor.backgroundAlerts)) },
-        label = { Text("Address") },
-        placeholder = { Text("name.tailxxxx.ts.net or 100.64.0.1:7777") },
-        supportingText = { Text(editor.error ?: "Tailnet name, host:port, or an https:// URL") },
-        isError = editor.error != null,
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(
-          keyboardType = KeyboardType.Uri,
-          capitalization = KeyboardCapitalization.None,
-        ),
-        modifier = Modifier.fillMaxWidth(),
-      )
+      AddressField(editor, onEvent)
       Spacer(Modifier.height(Space.s))
       OutlinedTextField(
         value = editor.name,
@@ -87,4 +81,41 @@ internal fun HostEditorSheet(editor: HostEditor, onEvent: (HomeUiEvent) -> Unit)
       }
     }
   }
+}
+
+/** The address, typed or scanned from the QR code that `rexc qr` prints on the desktop. */
+@Composable
+private fun AddressField(editor: HostEditor, onEvent: (HomeUiEvent) -> Unit) {
+  val context = LocalContext.current
+  var scanError by remember { mutableStateOf<String?>(null) }
+  val error = editor.error ?: scanError
+  OutlinedTextField(
+    value = editor.address,
+    onValueChange = {
+      scanError = null
+      onEvent(HomeUiEvent.EditorChanged(editor.name, it, editor.backgroundAlerts))
+    },
+    label = { Text("Address") },
+    placeholder = { Text("name.tailxxxx.ts.net or 100.64.0.1:7777") },
+    supportingText = { Text(error ?: "Tailnet name, host:port, or an https:// URL. Or scan the code from `rexc qr`.") },
+    isError = error != null,
+    singleLine = true,
+    keyboardOptions = KeyboardOptions(
+      keyboardType = KeyboardType.Uri,
+      capitalization = KeyboardCapitalization.None,
+    ),
+    trailingIcon = {
+      IconButton(onClick = {
+        scanHostQr(
+          context,
+          onResult = { qr ->
+            scanError = null
+            onEvent(HomeUiEvent.EditorChanged(qr.name.ifEmpty { editor.name }, qr.address, editor.backgroundAlerts))
+          },
+          onError = { scanError = it },
+        )
+      }) { Icon(Icons.Default.QrCodeScanner, contentDescription = "Scan QR code", tint = Colors.accent) }
+    },
+    modifier = Modifier.fillMaxWidth(),
+  )
 }

@@ -7,8 +7,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,11 +14,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -51,7 +49,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.namnv.rexc.core.ui.theme.Colors
-import dev.namnv.rexc.core.ui.theme.MonoFamily
 import dev.namnv.rexc.core.ui.theme.Radius
 import dev.namnv.rexc.core.ui.theme.Space
 import dev.namnv.rexc.navigation.Terminal
@@ -61,7 +58,6 @@ import uniffi.rexc_ffi.HostStatus
 import uniffi.rexc_ffi.ProgramState
 
 private const val COLLAPSED_CHEVRON_DEGREES = -90f
-private val chipMaxWidth = 140.dp
 
 /**
  * One server: header (tap folds it, long press drags it), its sessions, and a way to start another.
@@ -246,64 +242,28 @@ private fun SwipeBackground(direction: SwipeToDismissBoxValue) {
   }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+/** One line per session: a state dot, the label, and what its program is doing (or how many tabs it has). */
 @Composable
 private fun SessionRow(session: SessionUi, onClick: () -> Unit, modifier: Modifier = Modifier) {
   Row(
     modifier.fillMaxWidth().background(Colors.surface).clickable(onClick = onClick)
       .padding(horizontal = Space.l, vertical = Space.m),
-    verticalAlignment = Alignment.Top,
-  ) {
-    Box(
-      Modifier.size(34.dp).clip(RoundedCornerShape(10.dp)).background(Colors.badge),
-      contentAlignment = Alignment.Center,
-    ) {
-      Text(">_", fontFamily = MonoFamily, fontWeight = FontWeight.Bold, color = Colors.badgeInk, fontSize = 13.sp)
-    }
-    Spacer(Modifier.width(Space.m))
-    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Space.xs)) {
-      Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(
-          session.label,
-          color = Colors.ink,
-          fontSize = 16.sp,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-          modifier = Modifier.weight(1f, fill = false),
-        )
-        Spacer(Modifier.width(Space.s))
-        Text("${session.tabCount} tab${if (session.tabCount == 1) "" else "s"}", color = Colors.muted, fontSize = 12.sp)
-      }
-      FlowRow(
-        horizontalArrangement = Arrangement.spacedBy(Space.xs),
-        verticalArrangement = Arrangement.spacedBy(Space.xs),
-      ) {
-        session.tabs.forEach { TabChipView(it) }
-        if (session.hiddenTabs > 0) TabChipView(TabChip("more", "+${session.hiddenTabs}", null))
-      }
-    }
-  }
-}
-
-@Composable
-private fun TabChipView(tab: TabChip) {
-  Row(
-    Modifier.clip(
-      RoundedCornerShape(Radius.chip),
-    ).background(Colors.key).padding(horizontal = Space.s, vertical = 3.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) {
-    tab.state?.let {
-      StateDot(it, 6.dp)
-      Spacer(Modifier.width(5.dp))
+    val state = session.state?.takeIf { it != ProgramState.IDLE }
+    Box(Modifier.size(8.dp).clip(CircleShape).background(state?.let { stateColor(it) } ?: Colors.line))
+    Spacer(Modifier.width(Space.m))
+    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+      Text(session.label, color = Colors.ink, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      Text(
+        session.activity ?: "${session.tabCount} tab${if (session.tabCount == 1) "" else "s"}",
+        color = Colors.muted,
+        fontSize = 12.sp,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
     }
-    Text(
-      tab.name,
-      color = Colors.ink,
-      fontSize = 12.sp,
-      maxLines = 1,
-      overflow = TextOverflow.Ellipsis,
-      modifier = Modifier.widthIn(max = chipMaxWidth),
-    )
+    Spacer(Modifier.width(Space.s))
+    Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Colors.line, modifier = Modifier.size(18.dp))
   }
 }

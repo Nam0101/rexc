@@ -11,20 +11,22 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -36,9 +38,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.namnv.rexc.core.ui.theme.Colors
 import dev.namnv.rexc.core.ui.theme.MonoFamily
@@ -65,10 +69,10 @@ private val fonts = listOf(
 )
 
 private val themes = listOf(
-  ThemeMode.SYSTEM to "System",
-  ThemeMode.LIGHT to "Light",
-  ThemeMode.DARK to "Dark",
-  ThemeMode.TERMINAL to "Terminal",
+  Triple(ThemeMode.SYSTEM, "System", "Follow the phone's light or dark setting"),
+  Triple(ThemeMode.LIGHT, "Light", null),
+  Triple(ThemeMode.DARK, "Dark", null),
+  Triple(ThemeMode.TERMINAL, "Terminal", "Flat black everywhere, like the grid"),
 )
 
 /** App preferences, grouped the way you reach for them. Stateless. */
@@ -89,11 +93,11 @@ fun SettingsScreen(
         .verticalScroll(rememberScrollState()).padding(horizontal = Space.l),
       verticalArrangement = Arrangement.spacedBy(Space.m),
     ) {
-      Row(verticalAlignment = Alignment.CenterVertically) {
+      Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = Space.xs)) {
         IconButton(onClick = onBack) {
           Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Colors.ink)
         }
-        Text("Settings", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Colors.ink)
+        Text("Settings", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = Colors.ink)
       }
       AppearanceSection(state, onEvent)
       TerminalSection(state, onEvent)
@@ -106,16 +110,12 @@ fun SettingsScreen(
 @Composable
 private fun AppearanceSection(state: SettingsUiState, onEvent: (SettingsUiEvent) -> Unit) {
   val s = state.settings
-  Section("Appearance") {
-    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = Space.l, vertical = Space.m)) {
-      themes.forEachIndexed { i, (mode, label) ->
-        SegmentedButton(
-          selected = s.theme == mode,
-          onClick = { onEvent(SettingsUiEvent.ThemeChanged(mode)) },
-          shape = SegmentedButtonDefaults.itemShape(i, themes.size),
-        ) { Text(label, fontSize = 13.sp, maxLines = 1) }
-      }
+  Section("Appearance", Icons.Default.Palette) {
+    Text("Theme", fontSize = 13.sp, color = Colors.muted, modifier = Modifier.padding(start = Space.l, top = Space.m))
+    themes.forEach { (mode, label, detail) ->
+      RadioRow(label, detail, selected = s.theme == mode) { onEvent(SettingsUiEvent.ThemeChanged(mode)) }
     }
+    Divider()
     val dynamicOn = s.dynamicColor && state.dynamicColorSupported && s.theme != ThemeMode.TERMINAL
     SwitchRow(
       title = "Dynamic color",
@@ -168,7 +168,7 @@ private fun FontSizeRow(size: Float, family: FontFamily, onCommit: (Float) -> Un
 @Composable
 private fun TerminalSection(state: SettingsUiState, onEvent: (SettingsUiEvent) -> Unit) {
   val s = state.settings
-  Section("Terminal") {
+  Section("Terminal", Icons.Default.Terminal) {
     RadioRow(
       label = "Fit this screen",
       detail = "Opening a pane resizes it to your phone, like taking the keyboard.",
@@ -203,7 +203,7 @@ private fun TerminalSection(state: SettingsUiState, onEvent: (SettingsUiEvent) -
 
 @Composable
 private fun FeedbackSection(state: SettingsUiState, onEvent: (SettingsUiEvent) -> Unit) {
-  Section("Feedback") {
+  Section("Feedback", Icons.Default.Vibration) {
     SwitchRow(
       title = "Haptics",
       detail = "A short tick on keys, selection and long presses.",
@@ -216,7 +216,7 @@ private fun FeedbackSection(state: SettingsUiState, onEvent: (SettingsUiEvent) -
 @Composable
 private fun AboutSection(version: String) {
   val uri = LocalUriHandler.current
-  Section("About") {
+  Section("About", Icons.Default.Info) {
     Row(Modifier.fillMaxWidth().padding(horizontal = Space.l, vertical = Space.m)) {
       Text("Version", color = Colors.ink, fontSize = 16.sp, modifier = Modifier.weight(1f))
       Text(version, color = Colors.muted, fontSize = 16.sp, fontFamily = MonoFamily)
@@ -229,16 +229,23 @@ private fun AboutSection(version: String) {
   }
 }
 
+/** A titled group: an icon and a small heading over one rounded surface of rows. */
 @Composable
-private fun Section(title: String, content: @Composable ColumnScope.() -> Unit) {
+private fun Section(title: String, icon: ImageVector, content: @Composable ColumnScope.() -> Unit) {
   Column {
-    Text(
-      title,
-      fontSize = 13.sp,
-      fontWeight = FontWeight.SemiBold,
-      color = Colors.muted,
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
       modifier = Modifier.padding(start = Space.xs, bottom = Space.s),
-    )
+    ) {
+      Icon(icon, contentDescription = null, tint = Colors.muted, modifier = Modifier.size(16.dp))
+      Text(
+        title,
+        fontSize = 13.sp,
+        fontWeight = FontWeight.SemiBold,
+        color = Colors.muted,
+        modifier = Modifier.padding(start = Space.s),
+      )
+    }
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.card)).background(Colors.surface), content = content)
   }
 }

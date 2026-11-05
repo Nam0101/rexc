@@ -15,7 +15,7 @@ import uniffi.rexc_ffi.Session
 @Immutable
 data class HomeUiState(
   val hosts: ImmutableList<HostUi> = persistentListOf(),
-  /** Programs that need you, failed, or are working: blocked first. */
+  /** Programs that need you or failed: blocked first. Working and done ones show on their session row. */
   val inbox: ImmutableList<InboxUi> = persistentListOf(),
   val editor: HostEditor? = null,
   /** A host whose "new session" call is in flight. */
@@ -46,15 +46,9 @@ data class SessionUi(
   val tabCount: Int,
   /** The most urgent program state across the session's panes. */
   val state: ProgramState?,
-  /** One chip per tab, most urgent first, capped at [MAX_TAB_CHIPS]. */
-  val tabs: ImmutableList<TabChip>,
-  /** Tabs that did not get a chip. */
-  val hiddenTabs: Int,
+  /** What the most urgent program in the session is doing ("claude-code · adding hosts"), if any. */
+  val activity: String? = null,
 )
-
-/** A tab as a chip: its name and the most urgent state among its panes. */
-@Immutable
-data class TabChip(val id: String, val name: String, val state: ProgramState?)
 
 @Immutable
 data class InboxUi(
@@ -121,15 +115,17 @@ sealed interface HomeEffect {
 private val urgency =
   listOf(ProgramState.BLOCKED, ProgramState.ERROR, ProgramState.WORKING, ProgramState.DONE, ProgramState.IDLE)
 
-const val MAX_TAB_CHIPS = 6
-
 /** Lower is more urgent; no state at all comes last. */
 private fun rank(state: ProgramState?): Int = urgency.indexOf(state).let { if (it < 0) urgency.size else it }
 
 private fun Iterable<ProgramState?>.mostUrgent(): ProgramState? = filterNotNull().minByOrNull(::rank)
 
-fun Host.toUi(collapsed: Boolean = false): HostUi {
-  val ui = sessions.map { it.toUi() }
+/** States the home list surfaces in its own section; the rest only colour a session row. */
+fun ProgramState.needsYou(): Boolean = this == ProgramState.BLOCKED || this == ProgramState.ERROR
+
+/** [inbox] lends each session the line of its most urgent program. */
+fun Host.toUi(collapsed: Boolean = false, inbox: List<InboxItem> = emptyList()): HostUi {
+  val ui = sessions.map { s -> s.toUi(inbox.filter { it.sessionId == s.sessionId }.minByOrNull { rank(it.state) }) }
   return HostUi(
     id = hostId,
     name = name,
@@ -142,18 +138,16 @@ fun Host.toUi(collapsed: Boolean = false): HostUi {
   )
 }
 
-fun Session.toUi(): SessionUi {
-  val chips = windows.map { w -> TabChip(w.windowId, w.displayName, w.blocks.map { it.state }.mostUrgent()) }
-    .sortedBy { rank(it.state) }
-  return SessionUi(
-    id = sessionId,
-    label = label,
-    tabCount = windows.size,
-    state = chips.map { it.state }.mostUrgent(),
-    tabs = chips.take(MAX_TAB_CHIPS).toImmutableList(),
-    hiddenTabs = (chips.size - MAX_TAB_CHIPS).coerceAtLeast(0),
-  )
-}
+fun Session.toUi(program: InboxItem? = null): SessionUi = SessionUi(
+  id = sessionId,
+  label = label,
+  tabCount = windows.size,
+  state = windows.flatMap { w -> w.blocks.map { it.state } }.mostUrgent(),
+  activity = program?.let { p ->
+    val detail = p.message?.takeIf { it.isNotBlank() } ?: p.title?.takeIf { it.isNotBlank() }
+    listOfNotNull(p.app, detail).joinToString(" · ")
+  },
+)
 
 /** What a preview was fetched for; a new status or message means the screen moved on. */
 fun InboxItem.previewStamp(): String = "$state/$updatedAt/${message.orEmpty()}"

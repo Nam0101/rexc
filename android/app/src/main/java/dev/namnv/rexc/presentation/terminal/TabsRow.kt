@@ -1,6 +1,7 @@
 package dev.namnv.rexc.presentation.terminal
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -12,8 +13,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -25,6 +28,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedback
@@ -41,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import dev.namnv.rexc.core.ui.theme.Colors
+import dev.namnv.rexc.core.ui.theme.Radius
 import dev.namnv.rexc.core.ui.theme.Space
 import dev.namnv.rexc.presentation.home.StateDot
 import uniffi.rexc_ffi.ProgramState
@@ -48,6 +53,7 @@ import uniffi.rexc_ffi.ProgramState
 /**
  * The session's tabs. They share the width while they fit, then scroll at a fixed
  * width; a long press picks one up to drop it elsewhere (the server keeps the order).
+ * The selected tab carries a close button while there is another tab to land on.
  */
 @Composable
 internal fun TabsRow(state: TerminalUiState, ink: Color, onEvent: (TerminalUiEvent) -> Unit) {
@@ -74,11 +80,13 @@ internal fun TabsRow(state: TerminalUiState, ink: Color, onEvent: (TerminalUiEve
           selected = tab.id == state.currentTabId,
           ink = ink,
           dragging = drag.tabId == tab.id,
+          closable = state.tabs.size > 1,
           shift = if (drag.tabId == tab.id) drag.offset else drag.shiftFor(index, from, target, gapPx),
           modifier = Modifier.width(tabWidth)
             .onGloballyPositioned { drag.bounds[tab.id] = it.positionInParent().x to it.size.width.toFloat() }
             .tabDrag(drag, tab.id, ids, haptics, onEvent),
           onClick = { onEvent(TerminalUiEvent.SelectTab(tab.id)) },
+          onClose = { onEvent(TerminalUiEvent.CloseTab) },
         )
       }
       Chip(selected = false, ink = ink, onClick = { onEvent(TerminalUiEvent.NewTab) }) {
@@ -94,9 +102,11 @@ private fun TabChip(
   selected: Boolean,
   ink: Color,
   dragging: Boolean,
+  closable: Boolean,
   shift: Float,
   modifier: Modifier,
   onClick: () -> Unit,
+  onClose: () -> Unit,
 ) {
   val settled by animateFloatAsState(if (dragging) 0f else shift, label = "tabShift")
   Chip(
@@ -122,9 +132,20 @@ private fun TabChip(
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,
       textAlign = TextAlign.Center,
-      color = if (selected) Colors.onAccent else ink,
+      color = if (selected) ink else ink.copy(alpha = UNSELECTED_INK),
       modifier = Modifier.weight(1f),
     )
+    if (selected && closable) {
+      Spacer(Modifier.width(4.dp))
+      Icon(
+        Icons.Default.Close,
+        contentDescription = "Close tab",
+        tint = Colors.onAccent,
+        modifier = Modifier.clip(
+          RoundedCornerShape(Radius.chip),
+        ).clickable(onClick = onClose).padding(2.dp).size(14.dp),
+      )
+    }
   }
 }
 
@@ -191,5 +212,6 @@ private val NEW_TAB_WIDTH = 44.dp
 private val MIN_TAB_WIDTH = 72.dp
 private val MAX_TAB_WIDTH = 180.dp
 private val SCROLL_TAB_WIDTH = 128.dp
+private const val UNSELECTED_INK = 0.7f
 private const val LIFT_SCALE = 1.04f
 private const val LIFT_ELEVATION = 12f

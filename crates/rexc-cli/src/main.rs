@@ -40,6 +40,7 @@ async fn main() {
             let (addr, s, b, take) = (addr.clone(), args[2].clone(), args[3].clone(), cmd == "take");
             tokio::task::spawn_blocking(move || screen(&addr, &s, &b, take).map_err(|e| e.to_string())).await.unwrap_or_else(|e| Err(e.to_string())).map_err(Into::into)
         }
+        "qr" if args.len() >= 2 => qr(&addr, args.get(2).map(String::as_str).unwrap_or("")),
         "preview" if args.len() >= 4 => {
             let (addr, s, b) = (addr.clone(), args[2].clone(), args[3].clone());
             tokio::task::spawn_blocking(move || with_engine(&addr, true, |e, h| Ok(println!("{}", e.block_preview(h, &s, &b, 4)?))).map_err(|e| e.to_string())).await.unwrap_or_else(|e| Err(e.to_string())).map_err(Into::into)
@@ -50,7 +51,7 @@ async fn main() {
             tokio::task::spawn_blocking(move || with_engine(&addr, false, |e, h| Ok(e.quick_reply(h, &s, &b, &t, true)?)).map_err(|e| e.to_string())).await.unwrap_or_else(|e| Err(e.to_string())).map_err(Into::into)
         }
         _ => {
-            eprintln!("usage: rexc ls|watch [ADDR] | rexc stream|screen|take|preview ADDR SESSION BLOCK | rexc reply ADDR SESSION BLOCK TEXT");
+            eprintln!("usage: rexc ls|watch [ADDR] | rexc qr ADDR [NAME] | rexc stream|screen|take|preview ADDR SESSION BLOCK | rexc reply ADDR SESSION BLOCK TEXT");
             std::process::exit(2);
         }
     };
@@ -232,4 +233,32 @@ fn with_engine(addr: &str, connect: bool, f: impl FnOnce(&rexc_core::Engine, &st
     engine.remove_host(&host_id)?;
     let _ = std::fs::remove_dir_all(dir);
     result
+}
+
+/// Prints a QR code the phone's "Add server" sheet scans: the address and an optional name.
+fn qr(addr: &str, name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let endpoint = Endpoint::parse(addr)?;
+    if matches!(endpoint, Endpoint::Unix(_)) {
+        return Err("give the server's network address, not a socket path".into());
+    }
+    let mut payload = format!("rexc://add?address={}", percent(addr));
+    if !name.is_empty() {
+        payload.push_str(&format!("&name={}", percent(name)));
+    }
+    let code = qrcode::QrCode::new(payload.as_bytes())?;
+    println!("{}", code.render::<qrcode::render::unicode::Dense1x2>().quiet_zone(true).build());
+    println!("{payload}");
+    Ok(())
+}
+
+/// Percent-encodes everything outside the URL-safe set, so the payload survives any QR reader.
+fn percent(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => out.push(b as char),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }

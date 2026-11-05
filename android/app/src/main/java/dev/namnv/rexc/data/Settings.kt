@@ -23,7 +23,7 @@ data class Settings(
   val keepScreenOn: Boolean = true,
   val openMode: OpenMode = OpenMode.FIT,
   val theme: ThemeMode = ThemeMode.SYSTEM,
-  val dynamicColor: Boolean = true,
+  val dynamicColor: Boolean = false,
   val confirmClosePane: Boolean = true,
 )
 
