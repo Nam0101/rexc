@@ -21,7 +21,8 @@ fun parseHostQr(text: String): HostQr? {
 private fun fromPayload(query: String): HostQr? {
   val params = query.split('&').filter { it.isNotEmpty() }.associate { pair ->
     val (k, v) = pair.split('=', limit = 2).let { it[0] to it.getOrElse(1) { "" } }
-    k to URLDecoder.decode(v, Charsets.UTF_8)
+    // The (String, Charset) overload is API 33; minSdk is 28.
+    k to URLDecoder.decode(v, "UTF-8")
   }
   val address = params["address"]?.trim().orEmpty()
   return address.takeIf { it.isNotEmpty() }?.let { HostQr(address = it, name = params["name"]?.trim().orEmpty()) }
