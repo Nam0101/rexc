@@ -12,8 +12,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import dev.namnv.rexc.core.ui.theme.Colors
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import uniffi.rexc_ffi.HostStatus
 import uniffi.rexc_ffi.ProgramState
+
+/** Rows and cards drawn from a host's stale state: still readable, plainly not live. */
+internal const val STALE_ALPHA = 0.6f
 
 @Composable
 fun StateDot(state: ProgramState, size: androidx.compose.ui.unit.Dp = 8.dp) {
@@ -54,4 +61,19 @@ internal fun hostLabel(status: HostStatus, sessions: Int): String = when (status
   HostStatus.CONNECTING -> "Connecting…"
   HostStatus.RECONNECTING -> "Reconnecting…"
   HostStatus.OFFLINE -> "Offline"
+}
+
+/** When stale state was last live: "14:32" today, else "Nov 4, 14:32"; 12 or 24 hour as the device is set. */
+internal fun asOfLabel(
+  asOfMs: Long,
+  nowMs: Long,
+  is24Hour: Boolean,
+  zone: ZoneId = ZoneId.systemDefault(),
+  locale: Locale = Locale.getDefault(),
+): String {
+  val time = Instant.ofEpochMilli(asOfMs).atZone(zone)
+  val today = Instant.ofEpochMilli(nowMs).atZone(zone).toLocalDate()
+  val clock = if (is24Hour) "HH:mm" else "h:mm a"
+  val pattern = if (time.toLocalDate() == today) clock else "MMM d, $clock"
+  return "as of ${DateTimeFormatter.ofPattern(pattern, locale).format(time)}"
 }

@@ -36,6 +36,11 @@ class TerminalController(private val engine: Rexc, val id: ULong) {
     guard { engine.terminalPaste(id, text) }
   }
 
+  /** Types [text] in and never presses Enter: bracketed when the program asked, else on one line. */
+  fun insert(text: String) {
+    guard { engine.terminalInsert(id, text) }
+  }
+
   fun scroll(deltaRows: Int, col: Int, row: Int) {
     guard { engine.terminalScroll(id, deltaRows, col.toUShort(), row.toUShort()) }
   }
@@ -86,6 +91,9 @@ class TerminalController(private val engine: Rexc, val id: ULong) {
   fun release() {
     guard { engine.terminalRelease(id) }
   }
+
+  /** This terminal is on screen now, or no longer is: its block raises no alerts while it is. */
+  fun setVisible(visible: Boolean) = engine.setTerminalVisible(id, visible)
 
   fun close() = engine.closeTerminal(id)
 

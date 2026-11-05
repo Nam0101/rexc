@@ -5,6 +5,7 @@
 //! methods and gets coarse [`Event`]s back through its [`Listener`]; it then
 //! pulls the state it needs ([`Engine::host_state`], [`Engine::terminal_frame`]).
 
+mod cache;
 pub mod host;
 pub mod model;
 mod notify;
@@ -14,7 +15,7 @@ pub mod terminal;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use parking_lot::Mutex;
@@ -22,7 +23,7 @@ use rexc_proto::control::ClientInfo;
 use serde_json::{Value, json};
 
 pub use rexc_proto::model::{ProgramState, ProgramStatus};
-pub use rexc_term::{Cursor, CursorStyle, Frame, Highlight, KeyMods, Match, MouseButton, Prediction, Rgb, Row, Run, Scrollbar, Terminal, Underline};
+pub use rexc_term::{Cursor, CursorStyle, Frame, Highlight, KeyMods, Match, MouseButton, Prediction, Rgb, Row, Run, Scrollbar, Terminal, Theme, Underline, themes};
 
 use host::{HostCmd, HostHandle};
 pub use model::{BlockState, HostState, HostStatus, InboxItem, SessionState, WindowState};
@@ -43,8 +44,9 @@ pub struct Action {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AlertKind {
-    /// A program waits for you; `kind` is permission, question, or auth.
-    Blocked { kind: Option<String> },
+    /// A program waits for you; `kind` is permission, question, or auth. `msg` is the status's
+    /// own message, unsanitised: a reply hands it back as the [`Prompt`] it answers.
+    Blocked { kind: Option<String>, msg: Option<String> },
     Done,
     Error,
     /// OSC 9 / OSC 777 from a program.
@@ -78,6 +80,16 @@ pub enum Event {
     /// A program copied text (OSC 52); put it on the clipboard.
     Clipboard { host_id: String, text: String },
     OpenUrl { url: String },
+    /// A program rang the bell (BEL) in a block this terminal shows. At most one per
+    /// terminal every half second; extra bells are dropped.
+    Bell { terminal_id: u64 },
+}
+
+/// What a reply answers: a Blocked status's kind and message as the alert or inbox item had them.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Prompt {
+    pub kind: Option<String>,
+    pub msg: Option<String>,
 }
 
 pub trait Listener: Send + Sync + 'static {
@@ -92,6 +104,9 @@ pub enum EngineError {
     NoTerminal,
     #[error("host is not connected")]
     Offline,
+    /// A reply's prompt is gone (answered, changed, or the program moved on); nothing was typed.
+    #[error("No longer waiting — reply not sent")]
+    NotWaiting,
     #[error("{0}")]
     Connect(String),
     #[error("{0}")]
@@ -119,8 +134,8 @@ pub struct Engine {
     notifier: Notifier,
     client_info: ClientInfo,
     next_terminal: AtomicU64,
-    /// No screen is showing: a connection opened for one call is dropped afterwards.
-    background: AtomicBool,
+    /// The app's built-in terminal theme; `None` draws the server's colors.
+    terminal_theme: Mutex<Option<String>>,
 }
 
 impl Engine {
@@ -138,7 +153,7 @@ impl Engine {
             notifier,
             client_info,
             next_terminal: AtomicU64::new(1),
-            background: AtomicBool::new(true),
+            terminal_theme: Mutex::default(),
         });
         let records: Vec<HostRecord> = engine.store.lock().hosts.clone();
         for r in records {
@@ -148,7 +163,8 @@ impl Engine {
     }
 
     fn spawn_host(&self, record: HostRecord) -> Arc<HostHandle> {
-        let h = HostHandle::spawn(record.clone(), self.notifier.clone(), self.terminals.clone(), self.client_info.clone(), self.runtime.handle());
+        let cache = cache::path(&self.data_dir, &record.id);
+        let h = HostHandle::spawn(record.clone(), self.notifier.clone(), self.terminals.clone(), self.client_info.clone(), Some(cache), self.runtime.handle());
         self.hosts.lock().insert(record.id, h.clone());
         h
     }
@@ -172,7 +188,7 @@ impl Engine {
     /// Add a host; the address is checked but not connected to yet.
     pub fn add_host(&self, name: &str, address: &str) -> Result<String> {
         rexc_client::Endpoint::parse(address)?;
-        let record = HostRecord { id: store::new_id("host"), name: name.trim().to_string(), address: address.trim().to_string(), last: LastPosition::default(), background_alerts: false };
+        let record = HostRecord { id: store::new_id("host"), name: name.trim().to_string(), address: address.trim().to_string(), last: LastPosition::default(), background_alerts: false, theme: None };
         self.store.lock().hosts.push(record.clone());
         self.save();
         self.spawn_host(record.clone());
@@ -203,6 +219,7 @@ impl Engine {
     pub fn remove_host(&self, host_id: &str) -> Result<()> {
         let h = self.hosts.lock().remove(host_id).ok_or(EngineError::NoHost)?;
         h.send(HostCmd::Disconnect);
+        h.forget_cache();
         for t in self.terminals.all().into_iter().filter(|t| t.host.id == host_id) {
             self.close_terminal(t.id);
         }
@@ -220,6 +237,42 @@ impl Engine {
         self.save();
         self.notifier.hosts();
         Ok(())
+    }
+
+    /// A host's own terminal theme (a built-in name); `None` follows the app's. Its open terminals follow.
+    pub fn set_host_theme(&self, host_id: &str, name: Option<&str>) -> Result<()> {
+        let h = self.host(host_id)?;
+        {
+            let mut st = self.store.lock();
+            let r = st.host_mut(host_id).ok_or(EngineError::NoHost)?;
+            r.theme = name.map(str::to_owned);
+            h.record.lock().theme = r.theme.clone();
+        }
+        self.save();
+        self.notifier.hosts();
+        self.retheme(Some(host_id));
+        Ok(())
+    }
+
+    /// The app's terminal theme (a built-in name); `None` draws each server's colors. Open terminals follow.
+    pub fn set_terminal_theme(&self, name: Option<&str>) {
+        *self.terminal_theme.lock() = name.map(str::to_owned);
+        self.retheme(None);
+    }
+
+    fn theme_for(&self, host: &HostHandle) -> Option<Theme> {
+        let own = host.record.lock().theme.clone();
+        let app = self.terminal_theme.lock().clone();
+        effective_theme(own.as_deref(), app.as_deref())
+    }
+
+    /// Recolor the open terminals of `host_id`, or of every host.
+    fn retheme(&self, host_id: Option<&str>) {
+        for t in self.terminals.all().into_iter().filter(|t| host_id.is_none_or(|id| t.host.id == id)) {
+            let theme = self.theme_for(&t.host);
+            t.term.lock().set_theme(theme);
+            self.notifier.terminal(t.id);
+        }
     }
 
     pub fn connect(&self, host_id: &str) -> Result<()> {
@@ -248,7 +301,7 @@ impl Engine {
 
     /// Going to the background: keep hosts that want alerts, drop the rest.
     pub fn set_background(&self, background: bool) {
-        self.background.store(background, Ordering::Relaxed);
+        self.terminals.set_background(background);
         for h in self.hosts.lock().values() {
             let keep = h.record.lock().background_alerts;
             if background && !keep {
@@ -304,7 +357,10 @@ impl Engine {
     /// Type `text` (and Enter when `enter`) into a pane without opening it, e.g. "y" from a
     /// notification. Connects first when the host is down and, while the app is
     /// in the background, lets that connection go again afterwards.
-    pub fn quick_reply(&self, host_id: &str, session_id: &str, block_id: &str, text: &str, enter: bool) -> Result<()> {
+    ///
+    /// With `answers` (the reply answers a Blocked alert or inbox item), nothing is typed and
+    /// [`EngineError::NotWaiting`] comes back unless the block still waits on that prompt.
+    pub fn quick_reply(&self, host_id: &str, session_id: &str, block_id: &str, text: &str, enter: bool, answers: Option<&Prompt>) -> Result<()> {
         let h = self.host(host_id)?;
         let was_up = h.control().is_some();
         if !was_up {
@@ -312,11 +368,18 @@ impl Engine {
         }
         let data = reply_data(text, enter);
         let result = self.block_on(async {
+            // The host publishes its control only after a connect's full snapshot (sessions,
+            // views, program status), so from here the model is fresh even after a cold connect.
             let control = wait_for_control(&h, QUICK_REPLY_TIMEOUT).await?;
+            if let Some(prompt) = answers
+                && !still_waiting(h.state.lock().block(session_id, block_id), prompt)
+            {
+                return Err(EngineError::NotWaiting);
+            }
             control.call_block(session_id, block_id, "write", json!({"data": data})).await?;
             Ok::<_, EngineError>(())
         });
-        if !was_up && self.background.load(Ordering::Relaxed) && !h.record.lock().background_alerts {
+        if !was_up && self.terminals.background() && !h.record.lock().background_alerts {
             h.send(HostCmd::Disconnect);
         }
         result
@@ -440,14 +503,23 @@ impl Engine {
     pub fn open_terminal(&self, host_id: &str, session_id: &str, block_id: &str, take: bool) -> Result<u64> {
         let h = self.host(host_id)?;
         let id = self.next_terminal.fetch_add(1, Ordering::Relaxed);
-        self.terminals.open(id, h, session_id, block_id, take, self.notifier.clone(), self.runtime.handle());
+        let theme = self.theme_for(&h);
+        let t = self.terminals.open(id, h, session_id, block_id, take, self.notifier.clone(), self.runtime.handle());
+        t.term.lock().set_theme(theme);
         Ok(id)
     }
 
     pub fn close_terminal(&self, terminal_id: u64) {
+        self.terminals.set_visible(terminal_id, false);
         if let Some(t) = self.terminals.remove(terminal_id) {
             t.send(TermCmd::Close);
         }
+    }
+
+    /// The terminal the app shows right now (`visible`), or no longer shows. While one is
+    /// shown and the app is in the foreground, its block posts no alerts.
+    pub fn set_terminal_visible(&self, terminal_id: u64, visible: bool) {
+        self.terminals.set_visible(terminal_id, visible);
     }
 
     fn terminal(&self, id: u64) -> Result<Arc<terminal::TerminalHandle>> {
@@ -566,6 +638,19 @@ impl Engine {
         Ok(())
     }
 
+    /// Type text in without pressing Enter: bracketed when the program asked for pastes,
+    /// else on one line ([`rexc_term::Terminal::encode_insert`]).
+    pub fn terminal_insert(&self, id: u64, text: &str) -> Result<()> {
+        let t = self.terminal(id)?;
+        let bytes = {
+            let mut term = t.term.lock();
+            term.local_echo_reset();
+            term.encode_insert(text)
+        };
+        t.write(bytes);
+        Ok(())
+    }
+
     /// Scroll history by rows; when a full-screen program tracks the mouse,
     /// send it wheel events at the given cell instead.
     pub fn terminal_scroll(&self, id: u64, delta_rows: i32, col: u16, row: u16) -> Result<()> {
@@ -650,14 +735,9 @@ impl Engine {
         Ok(self.terminal(id)?.term.lock().all_text())
     }
 
-    /// A link under a cell: an OSC 8 hyperlink, else a URL printed in the row.
+    /// A link under a cell: an OSC 8 hyperlink, else a URL printed there, soft-wrapped rows joined.
     pub fn terminal_link_at(&self, id: u64, col: u16, row: u16) -> Result<Option<String>> {
-        let t = self.terminal(id)?;
-        let term = t.term.lock();
-        if let Some(u) = term.hyperlink_at(col, row) {
-            return Ok(Some(u));
-        }
-        Ok(url_at(&term.row_text(row), col as usize))
+        Ok(self.terminal(id)?.term.lock().link_at(col, row))
     }
 
     // ----- search in the scrollback -----
@@ -686,6 +766,12 @@ impl Engine {
 }
 
 /// What a named key types without modifiers, for the encoder.
+/// The theme a host's terminals draw: the host's, else the app's; `None` for the server's
+/// colors. A name that is not built in counts as unset.
+fn effective_theme(host: Option<&str>, app: Option<&str>) -> Option<Theme> {
+    host.and_then(themes::builtin).or_else(|| app.and_then(themes::builtin))
+}
+
 fn key_text(key: &str, mods: KeyMods) -> (String, Option<char>) {
     let c = match key.strip_prefix("key_") {
         Some(l) if l.len() == 1 => l.chars().next(),
@@ -741,31 +827,6 @@ fn shifted(c: char) -> char {
     }
 }
 
-/// The `http(s)://` URL that covers character index `col` of `text`, if any.
-pub fn url_at(text: &str, col: usize) -> Option<String> {
-    let chars: Vec<char> = text.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        let rest: String = chars[i..].iter().collect();
-        if rest.starts_with("http://") || rest.starts_with("https://") {
-            let mut end = i;
-            while end < chars.len() && !chars[end].is_whitespace() && !matches!(chars[end], '"' | '\'' | '<' | '>' | '`' | ')' | ']' | '}' | '|') {
-                end += 1;
-            }
-            while end > i && matches!(chars[end - 1], '.' | ',' | ';' | ':' | '!' | '?') {
-                end -= 1;
-            }
-            if (i..end).contains(&col) {
-                return Some(chars[i..end].iter().collect());
-            }
-            i = end.max(i + 1);
-        } else {
-            i += 1;
-        }
-    }
-    None
-}
-
 const QUICK_REPLY_TIMEOUT: Duration = Duration::from_secs(12);
 const PREVIEW_BYTES: u64 = 16 * 1024;
 
@@ -798,6 +859,20 @@ fn reply_data(text: &str, enter: bool) -> String {
     if enter { format!("{text}\r") } else { text.to_owned() }
 }
 
+/// Whether a block still waits on `prompt`: some program in it is Blocked with the same kind
+/// and, when both have one, the same message. A missing block waits on nothing.
+fn still_waiting(block: Option<&BlockState>, prompt: &Prompt) -> bool {
+    block.is_some_and(|b| {
+        b.programs.iter().any(|p| {
+            let same_msg = match (&p.msg, &prompt.msg) {
+                (Some(now), Some(then)) => now == then,
+                _ => true,
+            };
+            p.state == ProgramState::Blocked && p.kind == prompt.kind && same_msg
+        })
+    })
+}
+
 /// The actions a person can pick from a `client.keymap` reply: those with a title.
 /// Block methods have none (they are for bindings), and the client's own are ours to list.
 fn parse_actions(reply: &Value) -> Vec<Action> {
@@ -823,6 +898,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_host_theme_overrides_the_app_theme_which_overrides_the_server() {
+        assert_eq!(effective_theme(Some("Snazzy"), Some("Nightfox")), themes::builtin("Snazzy"));
+        assert_eq!(effective_theme(None, Some("Nightfox")), themes::builtin("Nightfox"));
+        assert_eq!(effective_theme(Some("gone"), Some("Nightfox")), themes::builtin("Nightfox"));
+        assert!(effective_theme(None, None).is_none());
+        assert!(effective_theme(Some("gone"), None).is_none());
+    }
+
+    #[test]
     fn tail_lines_keeps_the_last_non_blank_lines() {
         assert_eq!(tail_lines("a\n\nb  \nc\n\n", 2), "b\nc");
         assert_eq!(tail_lines("only", 4), "only");
@@ -834,6 +918,25 @@ mod tests {
         assert_eq!(reply_data("y\n", true), "y\r");
         assert_eq!(reply_data("y", false), "y");
         assert_eq!(reply_data("\u{1b}", false), "\u{1b}");
+    }
+
+    #[test]
+    fn a_reply_goes_out_only_while_its_prompt_is_open() {
+        let status = |state, kind: &str, msg: Option<&str>| ProgramStatus { state, kind: Some(kind.into()), msg: msg.map(Into::into), ..Default::default() };
+        let block = |p: ProgramStatus| BlockState { programs: vec![p], ..Default::default() };
+        let prompt = Prompt { kind: Some("permission".into()), msg: Some("Allow Bash?".into()) };
+        // Still blocked on the same question: send.
+        assert!(still_waiting(Some(&block(status(ProgramState::Blocked, "permission", Some("Allow Bash?")))), &prompt));
+        // A message missing on either side does not block the match.
+        assert!(still_waiting(Some(&block(status(ProgramState::Blocked, "permission", None))), &prompt));
+        assert!(still_waiting(Some(&block(status(ProgramState::Blocked, "permission", Some("x")))), &Prompt { msg: None, ..prompt.clone() }));
+        // Kind changed, message changed, moved on, or the block is gone: refuse.
+        assert!(!still_waiting(Some(&block(status(ProgramState::Blocked, "question", Some("Allow Bash?")))), &prompt));
+        assert!(!still_waiting(Some(&block(status(ProgramState::Blocked, "permission", Some("Allow Edit?")))), &prompt));
+        assert!(!still_waiting(Some(&block(status(ProgramState::Working, "permission", Some("Allow Bash?")))), &prompt));
+        assert!(!still_waiting(Some(&block(status(ProgramState::Done, "permission", Some("Allow Bash?")))), &prompt));
+        assert!(!still_waiting(Some(&BlockState::default()), &prompt));
+        assert!(!still_waiting(None, &prompt));
     }
 
     #[test]
@@ -849,16 +952,6 @@ mod tests {
         assert_eq!(got[0], Action { name: "dev_layout".into(), title: "Open Dev Layout".into(), category: "Actions".into(), keywords: "dev".into(), ..Default::default() });
         assert_eq!(got[1].description, "Clear state");
         assert!(parse_actions(&json!({})).is_empty());
-    }
-
-    #[test]
-    fn finds_urls_under_a_column() {
-        let line = "see https://rex.app/docs, and (http://x.io/a?b=1).";
-        assert_eq!(url_at(line, 4).as_deref(), Some("https://rex.app/docs"));
-        assert_eq!(url_at(line, 23).as_deref(), Some("https://rex.app/docs"));
-        assert_eq!(url_at(line, 24), None);
-        assert_eq!(url_at(line, 35).as_deref(), Some("http://x.io/a?b=1"));
-        assert_eq!(url_at("no links", 2), None);
     }
 
     #[test]

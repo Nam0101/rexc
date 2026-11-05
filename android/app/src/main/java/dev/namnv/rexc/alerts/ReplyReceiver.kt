@@ -15,11 +15,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import timber.log.Timber
+import uniffi.rexc_ffi.Prompt
 import uniffi.rexc_ffi.RexcException
 
 /**
  * The notification's inline Reply and quick buttons: types the text (and Enter, unless raw)
  * into the pane through the engine, which connects for just this call when the app is frozen.
+ * The engine types nothing when the pane no longer waits on the prompt the notification showed.
  */
 class ReplyReceiver : BroadcastReceiver() {
   @EntryPoint
@@ -36,6 +38,7 @@ class ReplyReceiver : BroadcastReceiver() {
     val enter: Boolean,
     val label: String,
     val id: Int,
+    val prompt: Prompt,
   )
 
   override fun onReceive(context: Context, intent: Intent) {
@@ -43,14 +46,15 @@ class ReplyReceiver : BroadcastReceiver() {
     val engine = EntryPointAccessors.fromApplication(context, Engine::class.java).engine()
     val pending = goAsync()
     scope.launch {
-      val error = try {
-        engine.call { quickReply(reply.host, reply.session, reply.block, reply.text, reply.enter) }
-        null
+      try {
+        engine.call { quickReply(reply.host, reply.session, reply.block, reply.text, reply.prompt, reply.enter) }
+        Notifications.replied(context, reply.id, reply.label, null)
+      } catch (e: RexcException.NotWaiting) {
+        Notifications.notWaiting(context, reply.id, reply.label, e.message)
       } catch (e: RexcException) {
         Timber.w(e, "Reply from notification failed")
-        e.message ?: "the server refused"
+        Notifications.replied(context, reply.id, reply.label, e.message ?: "the server refused")
       }
-      Notifications.replied(context, reply.id, reply.label, error)
       pending.finish()
     }
   }
@@ -70,6 +74,8 @@ class ReplyReceiver : BroadcastReceiver() {
       enter = !intent.getBooleanExtra(EXTRA_RAW, false),
       label = intent.getStringExtra(EXTRA_LABEL) ?: text,
       id = intent.getIntExtra(EXTRA_ID, 0),
+      // Only Blocked alerts carry reply actions, so every reply answers their prompt.
+      prompt = Prompt(intent.getStringExtra(EXTRA_PROMPT_KIND), intent.getStringExtra(EXTRA_PROMPT_MESSAGE)),
     )
   }
 
@@ -81,6 +87,10 @@ class ReplyReceiver : BroadcastReceiver() {
     /** Send [EXTRA_TEXT] without Enter (Esc). */
     const val EXTRA_RAW = "raw"
     const val EXTRA_LABEL = "label"
+
+    /** The Blocked status's kind and message the notification showed: what the reply answers. */
+    const val EXTRA_PROMPT_KIND = "prompt_kind"
+    const val EXTRA_PROMPT_MESSAGE = "prompt_message"
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
   }
 }

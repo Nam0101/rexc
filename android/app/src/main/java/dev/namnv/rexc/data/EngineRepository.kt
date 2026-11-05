@@ -4,11 +4,13 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.os.Build
+import dagger.Lazy
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.namnv.rexc.BuildConfig
 import dev.namnv.rexc.alerts.AlertService
 import dev.namnv.rexc.alerts.BatteryOptimization
 import dev.namnv.rexc.alerts.Notifications
+import dev.namnv.rexc.alerts.RexTileService
 import dev.namnv.rexc.core.dispatcher.AppCoroutineDispatchers
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -38,6 +40,7 @@ import uniffi.rexc_ffi.InboxItem
 import uniffi.rexc_ffi.Rexc
 import uniffi.rexc_ffi.RexcException
 import uniffi.rexc_ffi.RexcListener
+import uniffi.rexc_ffi.TerminalTheme
 
 /**
  * The one door to the Rust engine. The engine owns protocol, reconnects,
@@ -48,6 +51,8 @@ import uniffi.rexc_ffi.RexcListener
 class EngineRepository @Inject constructor(
   @ApplicationContext private val context: Context,
   private val dispatchers: AppCoroutineDispatchers,
+  /** Lazy: built off the main thread, to read the app lock on alerts and follow the terminal theme. */
+  private val settings: Lazy<SettingsRepository>,
 ) {
   private val scope = CoroutineScope(SupervisorJob() + dispatchers.default)
 
@@ -82,9 +87,16 @@ class EngineRepository @Inject constructor(
     },
   )
 
+  /** The built-in terminal themes, for the pickers. Parsed once from the engine's bundled files. */
+  val terminalThemes: ImmutableList<TerminalTheme> by lazy { engine.terminalThemes().toImmutableList() }
+
   init {
     refresh()
     NetworkWatcher(context, ::onNetworkChanged).start()
+    // The app-wide terminal theme: handed over at start and on every change; open terminals follow.
+    scope.launch {
+      settings.get().settings.map { it.terminalTheme }.distinctUntilChanged().collect { engine.setTerminalTheme(it) }
+    }
   }
 
   /** A new default network: skip the reconnect backoff, and check that connections that look open still are. */
@@ -96,13 +108,15 @@ class EngineRepository @Inject constructor(
   private fun dispatch(event: Event) {
     when (event) {
       is Event.Hosts, is Event.Host -> refresh()
-      is Event.Alert -> if (!inForeground) Notifications.show(context, event.alert)
+      is Event.Alert -> if (!inForeground) {
+        Notifications.show(context, event.alert, appLock = settings.get().settings.value.appLock)
+      }
       is Event.Clipboard -> scope.launch(dispatchers.main) {
         context.getSystemService(
           ClipboardManager::class.java,
         ).setPrimaryClip(ClipData.newPlainText("Terminal", event.text))
       }
-      is Event.Terminal, is Event.TerminalState, is Event.OpenUrl -> Unit
+      is Event.Terminal, is Event.TerminalState, is Event.OpenUrl, is Event.Bell -> Unit
     }
     _events.tryEmit(event)
   }
@@ -111,6 +125,7 @@ class EngineRepository @Inject constructor(
     scope.launch {
       _hosts.value = engine.allHosts().toImmutableList()
       _inbox.value = engine.inbox().toImmutableList()
+      RexTileService.sync(context, _inbox.value)
       syncAlertService()
     }
   }

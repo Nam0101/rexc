@@ -15,5 +15,6 @@ class SettingsStateTest {
     assertEquals(base.copy(fontSize = 16f), base.reduce(SettingsUiEvent.FontSizeChanged(16f)))
     assertEquals(base.copy(haptics = false), base.reduce(SettingsUiEvent.HapticsChanged(false)))
     assertEquals(base.copy(font = "system"), base.reduce(SettingsUiEvent.FontChanged("system")))
+    assertEquals(base.copy(terminalTheme = "Snazzy"), base.reduce(SettingsUiEvent.TerminalThemeChanged("Snazzy")))
   }
 }

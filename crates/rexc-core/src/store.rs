@@ -21,6 +21,9 @@ pub struct HostRecord {
     /// Keep the connection while the app is in the background, for alerts.
     #[serde(default)]
     pub background_alerts: bool,
+    /// A built-in terminal theme for this host's terminals; `None` follows the app's.
+    #[serde(default)]
+    pub theme: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -101,7 +104,7 @@ mod tests {
     fn round_trips_through_disk() {
         let dir = std::env::temp_dir().join(format!("rexc-store-{}", new_id("t")).replace(':', "-"));
         let mut s = Store::default();
-        s.hosts.push(HostRecord { id: new_id("host"), name: "mac".into(), address: "mac.tail.ts.net".into(), last: LastPosition::default(), background_alerts: true });
+        s.hosts.push(HostRecord { id: new_id("host"), name: "mac".into(), address: "mac.tail.ts.net".into(), last: LastPosition::default(), background_alerts: true, theme: Some("Snazzy".into()) });
         s.save(&dir).unwrap();
         let back = Store::load(&dir);
         assert_eq!(back, s);
@@ -109,10 +112,16 @@ mod tests {
         std::fs::remove_dir_all(dir).ok();
     }
 
+    #[test]
+    fn loads_hosts_saved_before_themes() {
+        let s: Store = serde_json::from_str(r#"{"hosts":[{"id":"h","name":"mac","address":"mac:1"}]}"#).unwrap();
+        assert_eq!(s.hosts[0].theme, None);
+    }
+
     fn store_of(ids: &[&str]) -> Store {
         let hosts = ids
             .iter()
-            .map(|id| HostRecord { id: id.to_string(), name: id.to_string(), address: String::new(), last: LastPosition::default(), background_alerts: false })
+            .map(|id| HostRecord { id: id.to_string(), name: id.to_string(), address: String::new(), last: LastPosition::default(), background_alerts: false, theme: None })
             .collect();
         Store { hosts }
     }

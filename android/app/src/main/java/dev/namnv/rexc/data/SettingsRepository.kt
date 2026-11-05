@@ -6,12 +6,14 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.preferencesDataStoreFile
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.namnv.rexc.core.dispatcher.AppCoroutineDispatchers
+import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -26,8 +28,13 @@ class SettingsRepository @Inject constructor(
   private val scope = CoroutineScope(SupervisorJob() + dispatchers.io)
   private val store = PreferenceDataStoreFactory.create(scope = scope) { context.preferencesDataStoreFile("settings") }
 
-  /** Read once up front (a tiny file) so the first frame already has the chosen theme. */
-  val settings: StateFlow<Settings> = store.data.map { it.toSettings() }.let { flow ->
+  /**
+   * Read once up front (a tiny file) so the first frame already has the chosen theme.
+   * An unreadable file fails closed: the app lock counts as on.
+   */
+  val settings: StateFlow<Settings> = store.data.map { it.toSettings() }.catch { e ->
+    if (e is IOException) emit(Settings(appLock = true)) else throw e
+  }.let { flow ->
     val first = runBlocking(dispatchers.io) { flow.first() }
     flow.stateIn(scope, SharingStarted.Eagerly, first)
   }

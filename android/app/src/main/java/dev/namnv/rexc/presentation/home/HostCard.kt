@@ -1,5 +1,6 @@
 package dev.namnv.rexc.presentation.home
 
+import android.text.format.DateFormat
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
@@ -53,8 +54,10 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -125,8 +128,11 @@ private fun HostHeader(host: HostUi, onEvent: (HomeUiEvent) -> Unit, dragHandle:
     Column(Modifier.weight(1f)) {
       Text(host.name, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = Colors.ink, maxLines = 1)
       val failed = host.error != null && host.status != HostStatus.CONNECTED
+      val is24Hour = DateFormat.is24HourFormat(LocalContext.current)
+      val asOf = host.asOfMs?.takeIf { host.stale }?.let { asOfLabel(it, System.currentTimeMillis(), is24Hour) }
+      val label = listOfNotNull(hostLabel(host.status, host.sessions.size), asOf).joinToString(" · ")
       Text(
-        host.error.takeIf { failed } ?: hostLabel(host.status, host.sessions.size),
+        host.error.takeIf { failed } ?: label,
         fontSize = 12.sp,
         color = if (failed) Colors.danger else Colors.muted,
         maxLines = 1,
@@ -154,6 +160,7 @@ private fun HostBody(host: HostUi, onEvent: (HomeUiEvent) -> Unit, onSessionDial
     SwipeableSessionRow(
       session = session,
       sharedKey = Terminal(host.id, session.id).sharedKey,
+      stale = host.stale,
       onOpen = { onEvent(HomeUiEvent.OpenSession(host.id, session.id)) },
       onClose = { onSessionDialog(SessionDialog.Close(host.id, session)) },
       onRename = { onSessionDialog(SessionDialog.Rename(host.id, session)) },
@@ -236,6 +243,7 @@ private fun NewSessionRow(enabled: Boolean, busy: Boolean, onClick: () -> Unit) 
 private fun SwipeableSessionRow(
   session: SessionUi,
   sharedKey: String,
+  stale: Boolean,
   onOpen: () -> Unit,
   onClose: () -> Unit,
   onRename: () -> Unit,
@@ -256,7 +264,7 @@ private fun SwipeableSessionRow(
     state = swipe,
     backgroundContent = { SwipeBackground(swipe.dismissDirection) },
   ) {
-    SessionRow(session, onOpen, Modifier.sharedBoundsFor(sharedKey))
+    SessionRow(session, stale, onOpen, Modifier.sharedBoundsFor(sharedKey))
   }
 }
 
@@ -275,17 +283,19 @@ private fun SwipeBackground(direction: SwipeToDismissBoxValue) {
 /**
  * One line per session: who runs in it (badge with its state), the label, and what the
  * program is doing (or how many tabs it has). A new activity line slides up over the old.
+ * A [stale] row fades its content, not its background, which hides the swipe actions.
  */
 @Composable
-private fun SessionRow(session: SessionUi, onClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun SessionRow(session: SessionUi, stale: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+  val content = if (stale) Modifier.alpha(STALE_ALPHA) else Modifier
   Row(
     modifier.fillMaxWidth().pressScale().background(Colors.surface).clickable(onClick = onClick)
       .padding(horizontal = Space.l, vertical = Space.m),
     verticalAlignment = Alignment.CenterVertically,
   ) {
-    AgentBadge(session.app, session.state, badgeSize)
+    AgentBadge(session.app, session.state, badgeSize, content)
     Spacer(Modifier.width(Space.m))
-    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+    Column(Modifier.weight(1f).then(content), verticalArrangement = Arrangement.spacedBy(2.dp)) {
       Text(session.label, color = Colors.ink, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
       AnimatedContent(
         targetState = session.activity ?: "${session.tabCount} tab${if (session.tabCount == 1) "" else "s"}",
@@ -307,6 +317,5 @@ private fun tickerTape() =
     .togetherWith(slideOutVertically(Motion.leave()) { -it / 2 } + fadeOut(Motion.leave()))
 
 /** One small icon turning into another: shrink and fade out, grow and fade in. */
-private fun morph() =
-  (scaleIn(Motion.enter(Motion.STANDARD), ICON_MORPH_SCALE) + fadeIn(Motion.enter(Motion.STANDARD)))
-    .togetherWith(scaleOut(Motion.leave(), ICON_MORPH_SCALE) + fadeOut(Motion.leave()))
+private fun morph() = (scaleIn(Motion.enter(Motion.STANDARD), ICON_MORPH_SCALE) + fadeIn(Motion.enter(Motion.STANDARD)))
+  .togetherWith(scaleOut(Motion.leave(), ICON_MORPH_SCALE) + fadeOut(Motion.leave()))

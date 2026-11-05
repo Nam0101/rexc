@@ -136,7 +136,7 @@ fun HomeScreen(
       }
     }
   }
-  state.editor?.let { editor -> HostEditorSheet(editor, onEvent) }
+  state.editor?.let { editor -> HostEditorSheet(editor, state.terminalThemes, onEvent) }
   SessionDialogs(dialog, onDismiss = { dialog = null }, onEvent = onEvent)
 }
 

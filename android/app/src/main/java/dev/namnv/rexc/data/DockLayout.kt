@@ -47,6 +47,7 @@ enum class DockAction(val id: String, val title: String) {
   PALETTE("palette", "Command palette"),
   SWITCHER("switcher", "Quick switcher"),
   MAP("map", "Pane map"),
+  MIC("mic", "Voice input"),
   ;
 
   companion object {
@@ -92,6 +93,7 @@ data class DockLayout(val items: List<DockItem>) {
         action(DockAction.PASTE),
         action(DockAction.KEYBOARD),
         action(DockAction.PALETTE),
+        action(DockAction.MIC),
       ),
     )
   }

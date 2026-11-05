@@ -8,18 +8,24 @@
 //! Canvas renderer only repaints what changed.
 
 pub mod keys;
+pub mod links;
 pub mod predict;
+pub mod themes;
 pub use keys::{KeyMods, key_from_name};
 pub use predict::Prediction;
+pub use themes::Theme;
 
 use libghostty_vt as vt;
 use libghostty_vt::render::{CellIterator, CursorVisualStyle, Dirty, RenderState, RowIterator};
-use libghostty_vt::screen::CellWide;
+use libghostty_vt::screen::{CellWide, GridRef};
 use libghostty_vt::search::{MatchBuffer, Search};
-use libghostty_vt::selection::{FormatOptions, SelectLineOptions, SelectWordOptions, Selection};
+use libghostty_vt::selection::{FormatOptions, SelectLineOptions, Selection};
 use libghostty_vt::style::{Palette, RgbColor, StyleColor};
 use libghostty_vt::terminal::{Point, PointCoordinate, PointSpace, ScrollViewport};
 use std::time::Instant;
+
+/// The most soft-wrapped rows read as one line for a link or a word.
+const MAX_JOINED_ROWS: u32 = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub struct Rgb {
@@ -291,6 +297,10 @@ pub struct Terminal {
     cell_px: (u32, u32),
     scrollback_bytes: usize,
     ansi: Option<[Rgb; 16]>,
+    /// The colors of the stream's last `theme` message.
+    server_theme: Theme,
+    /// A theme of our own, drawn instead of the server's while set.
+    theme: Option<Theme>,
     first_frame: bool,
     /// The next frame must treat every row as changed (scrolled, selected, recolored...).
     force_full: bool,
@@ -318,6 +328,8 @@ impl Terminal {
             cell_px: (0, 0),
             scrollback_bytes: 8 << 20,
             ansi: None,
+            server_theme: Theme::default(),
+            theme: None,
             first_frame: true,
             force_full: true,
             rev: 0,
@@ -332,8 +344,7 @@ impl Terminal {
 
     fn apply_options(&mut self) {
         let _ = self.raw.set_scrollback_max_bytes(Some(self.scrollback_bytes));
-        let ansi = self.ansi;
-        self.apply_ansi(ansi.as_ref());
+        self.recolor();
     }
 
     /// Cap scrollback memory; phones want this lower than desktops.
@@ -450,10 +461,26 @@ impl Terminal {
         self.raw.set_selection(Some(&sel)).is_ok()
     }
 
+    /// Select what a double tap on a viewport cell means: the run of cells of
+    /// its OSC 8 link, else the plain URL there, else the word up to the
+    /// nearest separator ([`links::word_in`]), else the cell itself.
+    /// Soft-wrapped rows count as one line.
     pub fn select_word(&mut self, col: u16, row: u16) -> bool {
         self.force_full = true;
-        let Ok(r) = self.raw.grid_ref(Self::viewport(col, row)) else { return false };
-        matches!(self.raw.select_word(SelectWordOptions::new(r)), Ok(Some(sel)) if self.raw.set_selection(Some(&sel)).is_ok())
+        let Some(line) = self.line_at(col, row) else { return false };
+        let hit = line.hit;
+        let link_of = |i: usize| self.screen_ref(line.cells[i].0, line.cells[i].2).and_then(|r| hyperlink(&r));
+        let range = if let Some(uri) = link_of(hit) {
+            let first = (0..hit).rev().take_while(|&i| link_of(i).as_ref() == Some(&uri)).last().unwrap_or(hit);
+            let last = (hit + 1..line.cells.len()).take_while(|&i| link_of(i).as_ref() == Some(&uri)).last().unwrap_or(hit);
+            first..last + 1
+        } else {
+            links::url_in(&line.chars, hit).or_else(|| links::word_in(&line.chars, hit)).unwrap_or(hit..hit + 1)
+        };
+        let (from, to) = (line.cells[range.start], line.cells[range.end - 1]);
+        let (Some(a), Some(b)) = (self.screen_ref(from.0, from.2), self.screen_ref(to.1, to.2)) else { return false };
+        let sel = Selection::new(a, b, false);
+        self.raw.set_selection(Some(&sel)).is_ok()
     }
 
     pub fn select_line(&mut self, row: u16) -> bool {
@@ -501,17 +528,73 @@ impl Terminal {
 
     /// The OSC 8 hyperlink under a viewport cell.
     pub fn hyperlink_at(&self, col: u16, row: u16) -> Option<String> {
+        hyperlink(&self.raw.grid_ref(Self::viewport(col, row)).ok()?)
+    }
+
+    /// The link under a viewport cell: its OSC 8 hyperlink, else a plain URL
+    /// printed there ([`links::url_in`]), read across soft-wrapped rows.
+    pub fn link_at(&self, col: u16, row: u16) -> Option<String> {
+        if let Some(u) = self.hyperlink_at(col, row) {
+            return Some(u);
+        }
+        let line = self.line_at(col, row)?;
+        let range = links::url_in(&line.chars, line.hit)?;
+        // A URL running into rows past the cap would come out cut.
+        if line.cut && range.end == line.chars.len() {
+            return None;
+        }
+        Some(line.chars[range].iter().collect())
+    }
+
+    fn screen_ref(&self, col: u16, row: u32) -> Option<GridRef<'_>> {
+        self.raw.grid_ref(Point::Screen(PointCoordinate { x: col, y: row })).ok()
+    }
+
+    /// The logical line through a viewport cell: its row joined with the rows
+    /// Ghostty marks soft-wrapped into or out of it, up to [`MAX_JOINED_ROWS`],
+    /// in screen coordinates so it reaches into scrollback.
+    fn line_at(&self, col: u16, row: u16) -> Option<Line> {
         let r = self.raw.grid_ref(Self::viewport(col, row)).ok()?;
-        let mut buf = vec![0u8; 2048];
-        let n = match r.hyperlink_uri(&mut buf) {
-            Ok(n) => n,
-            Err(vt::Error::OutOfSpace { required }) => {
-                buf.resize(required, 0);
-                r.hyperlink_uri(&mut buf).ok()?
+        let at = self.raw.point_from_grid_ref(&r, PointSpace::Screen).ok()??;
+        let wraps = |y: u32| self.screen_ref(0, y).and_then(|r| r.row().ok()).and_then(|r| r.is_wrapped().ok()).unwrap_or(false);
+        let mut top = at.y;
+        while top > 0 && at.y - top < MAX_JOINED_ROWS - 1 && wraps(top - 1) {
+            top -= 1;
+        }
+        let mut bottom = at.y;
+        while bottom - top < MAX_JOINED_ROWS - 1 && wraps(bottom) {
+            bottom += 1;
+        }
+        let (cols, _) = self.size();
+        let mut line = Line { chars: Vec::new(), cells: Vec::new(), hit: usize::MAX, cut: wraps(bottom) };
+        for y in top..=bottom {
+            for x in 0..cols {
+                let Some(r) = self.screen_ref(x, y) else { break };
+                let Ok(cell) = r.cell() else { break };
+                let lead = (x, y) == (at.x, at.y);
+                match cell.wide() {
+                    // A wide character's second cell belongs to the first.
+                    Ok(CellWide::SpacerTail) => {
+                        if let Some(last) = line.cells.last_mut() {
+                            last.1 = x;
+                            if lead {
+                                line.hit = line.cells.len() - 1;
+                            }
+                        }
+                        continue;
+                    }
+                    // The blank left at a row's end when a wide character wraps.
+                    Ok(CellWide::SpacerHead) => continue,
+                    _ => {}
+                }
+                if lead {
+                    line.hit = line.chars.len();
+                }
+                line.chars.push(cell.codepoint().ok().and_then(char::from_u32).filter(|&c| c != '\0').unwrap_or(' '));
+                line.cells.push((x, x, y));
             }
-            Err(_) => return None,
-        };
-        (n > 0).then(|| String::from_utf8_lossy(&buf[..n]).into_owned())
+        }
+        (line.hit < line.chars.len()).then_some(line)
     }
 
     /// Bytes to send for a wheel step at a cell, when the program tracks the
@@ -584,21 +667,40 @@ impl Terminal {
     }
 
     /// Apply a Rex `theme` message: hex colors plus `index=RRGGBB` palette entries.
+    /// While a theme of our own is set ([`Self::set_theme`]) it is only remembered.
     pub fn apply_theme(&mut self, foreground: Option<&str>, background: Option<&str>, cursor: Option<&str>, palette: &[String]) {
+        let palette = palette
+            .iter()
+            .filter_map(|entry| {
+                let (i, hex) = entry.split_once('=')?;
+                Some((i.trim().parse::<u8>().ok()?, Rgb::parse_hex(hex)?))
+            })
+            .collect();
+        self.server_theme = Theme { foreground: foreground.and_then(Rgb::parse_hex), background: background.and_then(Rgb::parse_hex), cursor: cursor.and_then(Rgb::parse_hex), palette, ..Theme::default() };
+        self.recolor();
+    }
+
+    /// Draw `theme` instead of the server's colors; `None` goes back to the server's last ones.
+    pub fn set_theme(&mut self, theme: Option<Theme>) {
+        if self.theme != theme {
+            self.theme = theme;
+            self.recolor();
+        }
+    }
+
+    /// Apply our theme if set, else the server's.
+    fn recolor(&mut self) {
+        let t = self.theme.clone().unwrap_or_else(|| self.server_theme.clone());
         self.force_full = true;
-        self.set_default_colors(foreground.and_then(Rgb::parse_hex), background.and_then(Rgb::parse_hex), cursor.and_then(Rgb::parse_hex));
+        self.set_default_colors(t.foreground, t.background, t.cursor);
         let ansi = self.ansi;
         self.apply_ansi(ansi.as_ref());
-        if palette.is_empty() {
+        if t.palette.is_empty() {
             return;
         }
         let Ok(Palette(mut pal)) = self.raw.default_color_palette() else { return };
-        for entry in palette {
-            let Some((i, hex)) = entry.split_once('=') else { continue };
-            let (Ok(i), Some(c)) = (i.trim().parse::<usize>(), Rgb::parse_hex(hex)) else { continue };
-            if i < 256 {
-                pal[i] = c.into();
-            }
+        for (i, c) in t.palette {
+            pal[i as usize] = c.into();
         }
         let _ = self.raw.set_default_color_palette(Some(Palette(pal)));
     }
@@ -814,21 +916,6 @@ impl Terminal {
         self.frame().lines.iter().map(|r| r.text().trim_end().to_owned()).collect()
     }
 
-    /// The text of a viewport row, one character per cell (a wide character counts once).
-    pub fn row_text(&self, row: u16) -> String {
-        let (cols, _) = self.size();
-        let mut out = String::with_capacity(cols as usize);
-        for col in 0..cols {
-            let Ok(r) = self.raw.grid_ref(Self::viewport(col, row)) else { break };
-            let Ok(cell) = r.cell() else { continue };
-            if matches!(cell.wide(), Ok(CellWide::SpacerTail | CellWide::SpacerHead)) {
-                continue;
-            }
-            out.push(cell_char(&self.raw, col, row).unwrap_or(' '));
-        }
-        out
-    }
-
     // ----- local echo -----
 
     pub fn set_local_echo(&mut self, on: bool) {
@@ -996,6 +1083,31 @@ impl FrameMeta {
     }
 }
 
+/// One logical line of text, one char per cell (a wide character once).
+struct Line {
+    chars: Vec<char>,
+    /// Per char: its first and last column and its screen row.
+    cells: Vec<(u16, u16, u32)>,
+    /// The index of the cell asked about.
+    hit: usize,
+    /// The last row joined still wraps on: the cap cut the line short.
+    cut: bool,
+}
+
+/// The OSC 8 hyperlink of a cell.
+fn hyperlink(r: &GridRef<'_>) -> Option<String> {
+    let mut buf = vec![0u8; 2048];
+    let n = match r.hyperlink_uri(&mut buf) {
+        Ok(n) => n,
+        Err(vt::Error::OutOfSpace { required }) => {
+            buf.resize(required, 0);
+            r.hyperlink_uri(&mut buf).ok()?
+        }
+        Err(_) => return None,
+    };
+    (n > 0).then(|| String::from_utf8_lossy(&buf[..n]).into_owned())
+}
+
 /// The first character of a viewport cell; `None` when it is empty.
 fn cell_char(raw: &vt::Terminal<'_, '_>, col: u16, row: u16) -> Option<char> {
     let r = raw.grid_ref(Point::Viewport(PointCoordinate { x: col, y: row as u32 })).ok()?;
@@ -1073,6 +1185,38 @@ mod tests {
         t.set_ansi_palette(None);
         t.apply_theme(None, None, None, &[]);
         assert_ne!(t.frame().lines[0].runs[0].fg, Rgb::new(0, 0xff, 0));
+    }
+
+    #[test]
+    fn server_theme_survives_a_snapshot_restore() {
+        let mut t = Terminal::new(10, 2);
+        t.write(b"\x1b[31mX");
+        t.apply_theme(Some("ffffff"), Some("445566"), None, &["1=00ff00".into()]);
+        let snap = t.snapshot().unwrap();
+        t.restore(&snap).unwrap();
+        let f = t.frame();
+        assert_eq!((f.background, f.lines[0].runs[0].fg), (Rgb::new(0x44, 0x55, 0x66), Rgb::new(0, 0xff, 0)));
+    }
+
+    #[test]
+    fn own_theme_wins_over_server_theme_and_gives_it_back() {
+        let mut t = Terminal::new(10, 2);
+        t.write(b"\x1b[31mX");
+        t.apply_theme(Some("ffffff"), Some("445566"), None, &["1=00ff00".into()]);
+        let own = Theme { foreground: Some(Rgb::new(0xee, 0xee, 0xee)), background: Some(Rgb::new(1, 2, 3)), palette: vec![(1, Rgb::new(0, 0, 0xff))], ..Theme::default() };
+        t.set_theme(Some(own));
+        let f = t.frame();
+        assert_eq!((f.background, f.lines[0].runs[0].fg), (Rgb::new(1, 2, 3), Rgb::new(0, 0, 0xff)));
+        // A server change while our theme is set is remembered, not drawn.
+        t.apply_theme(Some("ffffff"), Some("778899"), None, &["1=ff0000".into()]);
+        assert_eq!(t.frame().background, Rgb::new(1, 2, 3));
+        // It survives a snapshot restore.
+        let snap = t.snapshot().unwrap();
+        t.restore(&snap).unwrap();
+        assert_eq!(t.frame().background, Rgb::new(1, 2, 3));
+        t.set_theme(None);
+        let f = t.frame();
+        assert_eq!((f.background, f.lines[0].runs[0].fg), (Rgb::new(0x77, 0x88, 0x99), Rgb::new(0xff, 0, 0)));
     }
 
     #[test]
@@ -1179,11 +1323,63 @@ mod tests {
     }
 
     #[test]
-    fn row_text_reads_a_viewport_row() {
-        let mut t = Terminal::new(12, 3);
-        t.write("héllo 你好".as_bytes());
-        assert_eq!(t.row_text(0).trim_end(), "héllo 你好");
-        assert_eq!(t.row_text(1).trim(), "");
+    fn a_wrapped_url_reads_whole_from_any_row() {
+        let mut t = Terminal::new(10, 5);
+        t.write(b"https://x.io/abcdefghijklmnop end\r\n$ ");
+        let url = Some("https://x.io/abcdefghijklmnop");
+        for row in 0..3 {
+            assert_eq!(t.link_at(2, row).as_deref(), url, "row {row}");
+        }
+        assert!(t.select_word(1, 2));
+        assert_eq!(t.selection_text().as_deref(), url);
+        assert_eq!(t.link_at(1, 3), None, "the word after it");
+    }
+
+    #[test]
+    fn a_url_past_the_row_cap_is_not_cut_short() {
+        // 10 columns: 595 chars wrap over 60 rows, within the cap; 700 over 70, past it.
+        for (len, whole) in [(595, true), (700, false)] {
+            let url = format!("https://x.io/{}", "a".repeat(len - 13));
+            let mut t = Terminal::new(10, 3);
+            t.write(format!("{url}\r\n$ ").as_bytes());
+            t.scroll(-1000);
+            assert_eq!(t.link_at(2, 0), whole.then(|| url.clone()), "{len} from its first row");
+            t.scroll_to_bottom();
+            assert_eq!(t.link_at(2, 1), whole.then(|| url.clone()), "{len} from its last row");
+        }
+    }
+
+    #[test]
+    fn a_hard_newline_does_not_join_rows() {
+        let mut t = Terminal::new(10, 4);
+        t.write(b"https://ab\r\ncdef");
+        assert_eq!(t.link_at(3, 0).as_deref(), Some("https://ab"));
+        assert_eq!(t.link_at(1, 1), None);
+    }
+
+    #[test]
+    fn a_wrapped_url_reaches_into_scrollback() {
+        let mut t = Terminal::new(10, 3);
+        t.write(b"https://x.io/abcdefghijklmnop\r\n\r\n");
+        assert_eq!(t.link_at(0, 0).as_deref(), Some("https://x.io/abcdefghijklmnop"));
+    }
+
+    #[test]
+    fn double_tap_selects_links_paths_and_words() {
+        let mut t = Terminal::new(40, 4);
+        t.write(b"at src/main.rs:12:5. (see https://x.y/z)\r\n");
+        t.write(b"go \x1b]8;;https://rex.app\x1b\\the docs\x1b]8;;\x1b\\ now\r\n");
+        t.write("rm /tmp/a\\ b 你好.".as_bytes());
+        let pick = |t: &mut Terminal, col, row| {
+            assert!(t.select_word(col, row));
+            t.selection_text()
+        };
+        assert_eq!(pick(&mut t, 5, 0).as_deref(), Some("src/main.rs:12:5"));
+        assert_eq!(pick(&mut t, 30, 0).as_deref(), Some("https://x.y/z"));
+        assert_eq!(pick(&mut t, 4, 1).as_deref(), Some("the docs"), "OSC 8 run, space included");
+        assert_eq!(pick(&mut t, 4, 2).as_deref(), Some("/tmp/a\\ b"));
+        assert_eq!(pick(&mut t, 14, 2).as_deref(), Some("你好"), "a wide char's second cell");
+        assert_eq!(pick(&mut t, 2, 0).as_deref(), None, "a blank selects only itself");
     }
 
     fn scrolled_terminal() -> Terminal {

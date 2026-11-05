@@ -1,5 +1,11 @@
 package dev.namnv.rexc.presentation.terminal
 
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.speech.RecognizerIntent
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
@@ -31,6 +37,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.KeyboardHide
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.OpenWith
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
@@ -56,6 +63,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -66,9 +74,9 @@ import dev.namnv.rexc.core.ui.theme.Colors
 import dev.namnv.rexc.core.ui.theme.MonoFamily
 import dev.namnv.rexc.core.ui.theme.Motion
 import dev.namnv.rexc.core.ui.theme.Space
-import dev.namnv.rexc.presentation.common.pressScale
 import dev.namnv.rexc.data.DockAction
 import dev.namnv.rexc.data.DockItem
+import dev.namnv.rexc.presentation.common.pressScale
 import kotlin.math.abs
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -164,6 +172,7 @@ private fun DockCap(
       DockAction.PALETTE -> Key("⌘", onEdit) { onOpenSheet(TerminalSheet.PALETTE) }
       DockAction.SWITCHER -> Key("⇄", onEdit) { onOpenSheet(TerminalSheet.SWITCHER) }
       DockAction.MAP -> Key("▦", onEdit) { onOpenSheet(TerminalSheet.MAP) }
+      DockAction.MIC -> VoiceKey(input)
       null -> Unit
     }
   }
@@ -260,6 +269,28 @@ private fun IconKey(icon: ImageVector, description: String, onClick: () -> Unit)
       label = "iconKey",
     ) { shown ->
       Icon(shown, contentDescription = description, tint = LocalDockInk.current, modifier = Modifier.size(18.dp))
+    }
+  }
+}
+
+/**
+ * Speech to text through the system recognizer, which holds the microphone itself (no permission here).
+ * The first result is pasted without Enter, so a misheard command never runs.
+ */
+@Composable
+private fun VoiceKey(input: TerminalInput) {
+  val context = LocalContext.current
+  val listen = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+    result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()?.let(input::insert)
+  }
+  IconKey(Icons.Default.Mic, "Voice input") {
+    val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+      .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+      .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+    try {
+      listen.launch(intent)
+    } catch (_: ActivityNotFoundException) {
+      Toast.makeText(context, "Voice input isn't available", Toast.LENGTH_SHORT).show()
     }
   }
 }

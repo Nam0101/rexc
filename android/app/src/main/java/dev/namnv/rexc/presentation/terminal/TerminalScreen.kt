@@ -288,7 +288,9 @@ private fun PaneCarousel(state: TerminalUiState, pane: @Composable (ShownPane) -
       val sign = if (forward) 1 else -1
       val enter = slideInHorizontally(Motion.enter()) { sign * it } + fadeIn(Motion.enter(Motion.STANDARD)) +
         scaleIn(Motion.enter(), PANE_SCALE)
-      val leave = slideOutHorizontally(Motion.enter()) { -sign * it / PARALLAX } + fadeOut(Motion.leave(Motion.STANDARD))
+      val leave = slideOutHorizontally(Motion.enter()) {
+        -sign * it / PARALLAX
+      } + fadeOut(Motion.leave(Motion.STANDARD))
       enter togetherWith leave
     },
     label = "pane",

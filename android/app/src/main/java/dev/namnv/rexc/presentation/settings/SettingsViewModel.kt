@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.namnv.rexc.BuildConfig
 import dev.namnv.rexc.core.dispatcher.WHILE_UI_SUBSCRIBED
+import dev.namnv.rexc.data.EngineRepository
 import dev.namnv.rexc.data.SettingsRepository
 import javax.inject.Inject
 import kotlinx.coroutines.flow.StateFlow
@@ -15,10 +16,12 @@ import kotlinx.coroutines.launch
 
 /** Edits the user's preferences; every change is written straight through to the store. */
 @HiltViewModel
-class SettingsViewModel @Inject constructor(private val repo: SettingsRepository) : ViewModel() {
+class SettingsViewModel @Inject constructor(private val repo: SettingsRepository, engine: EngineRepository) :
+  ViewModel() {
   private val static = SettingsUiState(
     version = BuildConfig.VERSION_NAME,
     dynamicColorSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S,
+    terminalThemes = engine.terminalThemes,
   )
 
   val uiState: StateFlow<SettingsUiState> = repo.settings.map { static.copy(settings = it) }

@@ -2,7 +2,8 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use rexc_client::{DataEvent, DataStream};
@@ -16,6 +17,8 @@ use crate::notify::Notifier;
 
 /// Longest single `write` call; bigger pastes are split in order.
 const MAX_WRITE: usize = 48 * 1024;
+/// A bell inside this interval of the last one that rang is dropped, not deferred.
+const BELL_INTERVAL: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamState {
@@ -80,6 +83,24 @@ pub struct TerminalHandle {
     cmd: mpsc::UnboundedSender<TermCmd>,
     input: mpsc::UnboundedSender<Vec<u8>>,
     notifier: Notifier,
+    bell: Mutex<BellGate>,
+}
+
+/// When a terminal's bell last rang, so a burst rings once.
+// Adapted from sheprd (Apache-2.0): crates/sheprd-gpui/src/bell.rs
+#[derive(Debug, Default)]
+struct BellGate(Option<Instant>);
+
+impl BellGate {
+    /// Whether a bell at `now` rings. One within [`BELL_INTERVAL`] of the last that rang is
+    /// dropped and never rings later, so a program spamming BEL cannot queue up buzzes.
+    fn ring(&mut self, now: Instant) -> bool {
+        if self.0.is_some_and(|last| now.saturating_duration_since(last) < BELL_INTERVAL) {
+            return false;
+        }
+        self.0 = Some(now);
+        true
+    }
 }
 
 impl TerminalHandle {
@@ -112,9 +133,48 @@ impl TerminalHandle {
 #[derive(Default)]
 pub struct TerminalRegistry {
     terminals: Mutex<HashMap<u64, Arc<TerminalHandle>>>,
+    /// The terminal the app shows, while it shows one.
+    visible: Mutex<Option<u64>>,
+    /// The app is on screen. Off (background) until the UI says otherwise.
+    foreground: AtomicBool,
 }
 
 impl TerminalRegistry {
+    /// No screen is showing: a connection opened for one call is dropped afterwards.
+    pub fn background(&self) -> bool {
+        !self.foreground.load(Ordering::Relaxed)
+    }
+
+    pub fn set_background(&self, background: bool) {
+        self.foreground.store(!background, Ordering::Relaxed);
+    }
+
+    /// `visible` makes `id` the terminal on screen; otherwise it stops being it (if it was).
+    pub fn set_visible(&self, id: u64, visible: bool) {
+        let mut v = self.visible.lock();
+        if visible {
+            *v = Some(id);
+        } else if *v == Some(id) {
+            *v = None;
+        }
+    }
+
+    /// Whether a person is looking at this block's terminal right now: the app is in the
+    /// foreground and its visible terminal shows the block.
+    pub fn on_screen(&self, host_id: &str, block_id: &str) -> bool {
+        if self.background() {
+            return false;
+        }
+        let Some(id) = *self.visible.lock() else { return false };
+        self.get(id).is_some_and(|t| t.host.id == host_id && t.block_id == block_id)
+    }
+
+    /// The bell rang in a block: the terminals open on it that ring now (see [`BellGate`]).
+    pub fn ring(&self, host_id: &str, block_id: &str) -> Vec<u64> {
+        let now = Instant::now();
+        self.all().into_iter().filter(|t| t.host.id == host_id && t.block_id == block_id && t.bell.lock().ring(now)).map(|t| t.id).collect()
+    }
+
     pub fn get(&self, id: u64) -> Option<Arc<TerminalHandle>> {
         self.terminals.lock().get(&id).cloned()
     }
@@ -178,6 +238,7 @@ impl TerminalRegistry {
             cmd: cmd_tx,
             input: in_tx,
             notifier,
+            bell: Mutex::default(),
         });
         t.info.lock().host_id = t.host.id.clone();
         self.terminals.lock().insert(id, t.clone());
@@ -475,6 +536,18 @@ fn split_utf8(bytes: &[u8], max: usize) -> Vec<&[u8]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bell_burst_rings_once_per_interval_and_is_dropped_not_deferred() {
+        let start = Instant::now();
+        let mut gate = BellGate::default();
+        assert!(gate.ring(start));
+        assert!(!gate.ring(start + BELL_INTERVAL / 2));
+        // The dropped bell did not restart the interval, and nothing rings on its own later.
+        assert!(gate.ring(start + BELL_INTERVAL));
+        assert!(!gate.ring(start + BELL_INTERVAL + Duration::from_millis(499)));
+        assert!(gate.ring(start + BELL_INTERVAL * 2));
+    }
 
     #[test]
     fn splits_on_character_boundaries() {

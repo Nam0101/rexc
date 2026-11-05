@@ -404,7 +404,7 @@ private fun Modifier.viewGestures(
     .transformable(transformState, canPan = { false })
 }
 
-/** Copy / paste / copy all over a selection; every action, and dismissal, clears the selection. */
+/** Copy / insert / paste / copy all over a selection; every action, and dismissal, clears the selection. */
 @Composable
 private fun SelectionToolbar(controller: TerminalController, input: TerminalInput, onDone: () -> Unit) {
   fun finish(action: () -> Unit = {}) {
@@ -419,6 +419,7 @@ private fun SelectionToolbar(controller: TerminalController, input: TerminalInpu
       ).clip(RoundedCornerShape(14.dp)).background(Colors.raised).padding(horizontal = Space.xs, vertical = Space.xs),
     ) {
       ToolbarAction("Copy") { finish { controller.selectionText()?.let(input::copy) } }
+      ToolbarAction("Insert") { finish { controller.selectionText()?.let(input::insert) } }
       ToolbarAction("Paste") { finish(input::paste) }
       ToolbarAction("Copy all") { finish { controller.allText().takeIf { it.isNotEmpty() }?.let(input::copy) } }
     }

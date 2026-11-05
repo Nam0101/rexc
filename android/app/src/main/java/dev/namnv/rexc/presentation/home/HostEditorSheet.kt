@@ -2,6 +2,7 @@ package dev.namnv.rexc.presentation.home
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -34,10 +35,13 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.sp
 import dev.namnv.rexc.core.ui.theme.Colors
 import dev.namnv.rexc.core.ui.theme.Space
+import dev.namnv.rexc.presentation.common.TerminalColorsRow
+import kotlinx.collections.immutable.ImmutableList
+import uniffi.rexc_ffi.TerminalTheme
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun HostEditorSheet(editor: HostEditor, onEvent: (HomeUiEvent) -> Unit) {
+internal fun HostEditorSheet(editor: HostEditor, themes: ImmutableList<TerminalTheme>, onEvent: (HomeUiEvent) -> Unit) {
   ModalBottomSheet(onDismissRequest = { onEvent(HomeUiEvent.DismissEditor) }, containerColor = Colors.surface) {
     Column(Modifier.padding(horizontal = Space.xl).padding(bottom = Space.xl)) {
       Text(
@@ -71,6 +75,14 @@ internal fun HostEditorSheet(editor: HostEditor, onEvent: (HomeUiEvent) -> Unit)
           onEvent(HomeUiEvent.EditorChanged(editor.name, editor.address, it))
         })
       }
+      Spacer(Modifier.height(Space.s))
+      TerminalColorsRow(
+        themes = themes,
+        selected = editor.theme,
+        unsetLabel = "Same as app",
+        onSelect = { onEvent(HomeUiEvent.EditorThemeChanged(it)) },
+        contentPadding = PaddingValues(vertical = Space.s),
+      )
       Spacer(Modifier.height(Space.l))
       Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
         TextButton(onClick = { onEvent(HomeUiEvent.DismissEditor) }) { Text("Cancel") }

@@ -32,6 +32,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -56,6 +57,7 @@ import uniffi.rexc_ffi.ProgramState
 /**
  * One program that needs you, as a row in the "Needs you" group: what it asks and where.
  * A blocked one also shows its last screen lines and a reply box that needs no terminal.
+ * A stale item fades what it says but keeps the reply box: the engine re-checks before typing.
  */
 @Composable
 internal fun InboxCard(item: InboxUi, onEvent: (HomeUiEvent) -> Unit) {
@@ -68,7 +70,8 @@ internal fun InboxCard(item: InboxUi, onEvent: (HomeUiEvent) -> Unit) {
       .padding(horizontal = Space.l, vertical = Space.m),
     verticalArrangement = Arrangement.spacedBy(Space.s),
   ) {
-    Row(verticalAlignment = Alignment.Top) {
+    val content = if (item.stale) Modifier.alpha(STALE_ALPHA) else Modifier
+    Row(content, verticalAlignment = Alignment.Top) {
       AgentBadge(item.app, item.state, BADGE_SIZE)
       Spacer(Modifier.width(Space.m))
       Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -86,7 +89,7 @@ internal fun InboxCard(item: InboxUi, onEvent: (HomeUiEvent) -> Unit) {
     }
     if (item.state == ProgramState.BLOCKED) {
       item.preview?.takeIf { it.isNotBlank() }?.let {
-        ScreenPreview(it, onOpen = { onEvent(HomeUiEvent.OpenInbox(item)) })
+        ScreenPreview(it, onOpen = { onEvent(HomeUiEvent.OpenInbox(item)) }, content)
       }
       ReplyRow(sending = item.sending, onSend = { onEvent(HomeUiEvent.QuickReply(item, it)) })
     }
@@ -95,7 +98,7 @@ internal fun InboxCard(item: InboxUi, onEvent: (HomeUiEvent) -> Unit) {
 
 /** The pane's last lines, as the desktop shows them; a tap opens the pane, a long press copies them. */
 @Composable
-private fun ScreenPreview(text: String, onOpen: () -> Unit) {
+private fun ScreenPreview(text: String, onOpen: () -> Unit, modifier: Modifier = Modifier) {
   val context = LocalContext.current
   val haptics = LocalHapticFeedback.current
   val hapticsOn = LocalSettings.current.haptics
@@ -107,7 +110,7 @@ private fun ScreenPreview(text: String, onOpen: () -> Unit) {
     color = Colors.ink.copy(alpha = PREVIEW_INK),
     maxLines = PREVIEW_LINES,
     overflow = TextOverflow.Ellipsis,
-    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.chip)).background(Colors.bg)
+    modifier = modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.chip)).background(Colors.bg)
       .combinedClickable(
         onClick = onOpen,
         onLongClick = {

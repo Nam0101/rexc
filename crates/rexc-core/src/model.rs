@@ -2,6 +2,7 @@
 //! Plain data, cloned out from behind the engine's locks.
 
 use rexc_proto::model::{ProcessInfo, ProgramState, ProgramStatus, SessionSummary, SessionView};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -27,6 +28,11 @@ pub struct HostState {
     pub sessions: Vec<SessionState>,
     /// Labels of other clients attached to any session, by client id.
     pub clients: HashMap<String, String>,
+    /// `sessions` are not live: loaded from the cache at launch, or kept from before the
+    /// connection went away. Cleared once a connect's full snapshot is in.
+    pub stale: bool,
+    /// When stale `sessions` were last known live (unix ms).
+    pub as_of_ms: Option<i64>,
 }
 
 impl HostState {
@@ -56,7 +62,7 @@ impl HostState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct SessionState {
     pub session_id: String,
     pub label: String,
@@ -65,6 +71,7 @@ pub struct SessionState {
     pub active_window_id: Option<String>,
     pub windows: Vec<WindowState>,
     /// Metadata for blocks that are no longer in a window, kept until the block closes.
+    #[serde(skip)]
     pub loaded: bool,
 }
 
@@ -131,7 +138,7 @@ impl SessionState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct WindowState {
     pub window_id: String,
     pub label: String,
@@ -173,7 +180,7 @@ pub fn is_generated_label(label: &str) -> bool {
     label.strip_prefix("Window ").is_some_and(|rest| rest.len() == 8 && rest.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct BlockState {
     pub block_id: String,
     pub label: String,
@@ -254,6 +261,8 @@ pub struct InboxItem {
     pub title: Option<String>,
     pub message: Option<String>,
     pub updated_at: Option<String>,
+    /// Built from the host's stale state; see [`HostState::stale`].
+    pub stale: bool,
 }
 
 pub fn inbox(hosts: &[HostState]) -> Vec<InboxItem> {
@@ -280,6 +289,7 @@ pub fn inbox(hosts: &[HostState]) -> Vec<InboxItem> {
                         title: p.title.clone(),
                         message: p.msg.clone(),
                         updated_at: p.updated_at.clone(),
+                        stale: h.stale,
                     });
                 }
             }

@@ -5,6 +5,8 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- App lock: the system biometric / screen-lock prompt. -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
     <!-- Background alerts: the foreground service that keeps the watched connections up. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <!-- Lets the user exempt the app from Doze so background alerts survive (sideloaded, not on the store). -->
@@ -14,6 +16,8 @@
     <application
         android:name=".RexcApplication"
         android:allowBackup="true"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:label="@string/app_name"
@@ -34,6 +38,12 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Share text from any app into a terminal: pasted at the prompt, never run. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
         </activity>
         <service
             android:name=".alerts.AlertService"
@@ -47,5 +57,16 @@
         <receiver
             android:name=".alerts.ReplyReceiver"
             android:exported="false" />
+        <!-- Quick Settings tile: how many programs need you; a tap opens Home. -->
+        <service
+            android:name=".alerts.RexTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_notification"
+            android:label="Rex"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>

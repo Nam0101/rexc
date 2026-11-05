@@ -162,6 +162,31 @@ impl Terminal {
             Err(_) => text.as_bytes().to_vec(),
         }
     }
+
+    /// Encode text to type in without running it: a bracketed paste when the program asked
+    /// for one, else the text on one line (each line break a space, other C0 controls but
+    /// tab dropped), so nothing presses Enter.
+    pub fn encode_insert(&self, text: &str) -> Vec<u8> {
+        if self.raw.mode(vt::terminal::Mode::BRACKETED_PASTE).unwrap_or(false) {
+            return self.encode_paste(text);
+        }
+        let mut out = String::with_capacity(text.len());
+        let mut chars = text.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                '\r' | '\n' => {
+                    if c == '\r' && chars.peek() == Some(&'\n') {
+                        chars.next();
+                    }
+                    out.push(' ');
+                }
+                '\t' => out.push(c),
+                c if c < ' ' => {}
+                c => out.push(c),
+            }
+        }
+        out.into_bytes()
+    }
 }
 
 #[cfg(test)]
@@ -191,5 +216,14 @@ mod tests {
         assert_eq!(t.encode_paste("hi\n"), b"hi\r");
         t.write(b"\x1b[?2004h");
         assert_eq!(t.encode_paste("hi"), b"\x1b[200~hi\x1b[201~");
+    }
+
+    #[test]
+    fn insert_never_presses_enter() {
+        let mut t = Terminal::new(10, 2);
+        assert_eq!(t.encode_insert("a\r\nb\nc\rd\te\x1b[31m\x07f"), b"a b c d\te[31mf");
+        t.write(b"\x1b[?2004h");
+        assert_eq!(t.encode_insert("a\nb"), t.encode_paste("a\nb"));
+        assert!(t.encode_insert("a\nb").starts_with(b"\x1b[200~"));
     }
 }

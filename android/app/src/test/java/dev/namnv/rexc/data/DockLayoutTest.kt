@@ -32,6 +32,8 @@ class DockLayoutTest {
     val labels = DockLayout.Default.items.map { it.label }
     assertTrue(labels.containsAll(listOf("esc", "tab", "home", "end", "pgup", "pgdn", "-", "|")))
     assertTrue(DockLayout.Default.items.contains(DockItem.Action("palette")))
+    assertEquals(DockItem.Action("mic"), DockLayout.Default.items.last())
+    assertEquals("Voice input", DockItem.Action("mic").label)
   }
 
   @Test

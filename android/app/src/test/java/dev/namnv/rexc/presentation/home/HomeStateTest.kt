@@ -1,5 +1,8 @@
 package dev.namnv.rexc.presentation.home
 
+import java.time.ZoneId
+import java.time.ZonedDateTime
+import java.util.Locale
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlinx.collections.immutable.persistentListOf
@@ -20,8 +23,14 @@ class HomeStateTest {
 
   private fun session(vararg windows: Window) = Session("s", "work", "w1", true, false, windows.toList())
 
-  private fun inbox(sessionId: String, app: String, state: ProgramState, message: String?, title: String? = null) =
-    InboxItem("h", "mac", sessionId, "work", "w1", "tab", "b", app, state, null, title, message, null)
+  private fun inbox(
+    sessionId: String,
+    app: String,
+    state: ProgramState,
+    message: String?,
+    title: String? = null,
+    stale: Boolean = false,
+  ) = InboxItem("h", "mac", sessionId, "work", "w1", "tab", "b", app, state, null, title, message, null, stale)
 
   @Test
   fun sessionToUi_countsTabsAndKeepsTheMostUrgentState() {
@@ -99,6 +108,8 @@ class HomeStateTest {
       error = null,
       sessions = listOf(session(Window("w1", "Window 1", "tab", null, null, false, listOf(block("b1", null, null))))),
       clients = emptyList(),
+      stale = false,
+      asOfMs = null,
     )
     val inbox = listOf(
       inbox("s", "claude-code", ProgramState.WORKING, "working on it"),
@@ -109,6 +120,37 @@ class HomeStateTest {
     assertEquals("codex", host.toUi(inbox = inbox).sessions.single().app)
     assertEquals(null, host.toUi().sessions.single().activity)
     assertEquals(null, host.toUi().sessions.single().app)
+  }
+
+  @Test
+  fun staleState_carriesOverToTheHostAndItsInboxItems() {
+    val host = Host(
+      hostId = "h",
+      name = "mac",
+      address = "mac.ts.net",
+      status = HostStatus.OFFLINE,
+      clientId = null,
+      error = null,
+      sessions = emptyList(),
+      clients = emptyList(),
+      stale = true,
+      asOfMs = 1_000L,
+    )
+    assertEquals(true, host.toUi().stale)
+    assertEquals(1_000L, host.toUi().asOfMs)
+    assertEquals(true, inbox("s", "codex", ProgramState.BLOCKED, "ok?", stale = true).toUi().stale)
+    assertEquals(false, inbox("s", "codex", ProgramState.BLOCKED, "ok?").toUi().stale)
+  }
+
+  @Test
+  fun asOfLabel_showsTheTimeTodayAndTheDateBefore() {
+    val zone = ZoneId.of("UTC")
+    val at = ZonedDateTime.of(2026, 11, 5, 14, 32, 0, 0, zone).toInstant().toEpochMilli()
+    val sameDay = ZonedDateTime.of(2026, 11, 5, 23, 0, 0, 0, zone).toInstant().toEpochMilli()
+    val nextDay = ZonedDateTime.of(2026, 11, 6, 9, 0, 0, 0, zone).toInstant().toEpochMilli()
+    assertEquals("as of 14:32", asOfLabel(at, sameDay, is24Hour = true, zone = zone, locale = Locale.US))
+    assertEquals("as of 2:32 PM", asOfLabel(at, sameDay, is24Hour = false, zone = zone, locale = Locale.US))
+    assertEquals("as of Nov 5, 14:32", asOfLabel(at, nextDay, is24Hour = true, zone = zone, locale = Locale.US))
   }
 
   @Test

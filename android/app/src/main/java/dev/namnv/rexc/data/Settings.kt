@@ -25,6 +25,10 @@ data class Settings(
   val theme: ThemeMode = ThemeMode.SYSTEM,
   val dynamicColor: Boolean = false,
   val confirmClosePane: Boolean = true,
+  /** Ask for the fingerprint or screen lock on launch and after 30 s away. */
+  val appLock: Boolean = false,
+  /** A built-in terminal theme by name; null draws each server's own colors. A host can override it. */
+  val terminalTheme: String? = null,
 )
 
 const val FONT_JETBRAINS = "jetbrains"
@@ -43,6 +47,8 @@ private val OPEN_MODE = stringPreferencesKey("open_mode")
 private val THEME = stringPreferencesKey("theme")
 private val DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
 private val CONFIRM_CLOSE_PANE = booleanPreferencesKey("confirm_close_pane")
+private val APP_LOCK = booleanPreferencesKey("app_lock")
+private val TERMINAL_THEME = stringPreferencesKey("terminal_theme")
 
 /** Missing or unreadable values fall back to the defaults, so a new field never breaks old installs. */
 fun Preferences.toSettings(): Settings {
@@ -57,6 +63,8 @@ fun Preferences.toSettings(): Settings {
     theme = enumOrNull<ThemeMode>(this[THEME]) ?: d.theme,
     dynamicColor = this[DYNAMIC_COLOR] ?: d.dynamicColor,
     confirmClosePane = this[CONFIRM_CLOSE_PANE] ?: d.confirmClosePane,
+    appLock = this[APP_LOCK] ?: d.appLock,
+    terminalTheme = this[TERMINAL_THEME] ?: d.terminalTheme,
   )
 }
 
@@ -70,6 +78,8 @@ fun MutablePreferences.write(s: Settings) {
   this[THEME] = s.theme.name
   this[DYNAMIC_COLOR] = s.dynamicColor
   this[CONFIRM_CLOSE_PANE] = s.confirmClosePane
+  this[APP_LOCK] = s.appLock
+  if (s.terminalTheme == null) remove(TERMINAL_THEME) else this[TERMINAL_THEME] = s.terminalTheme
 }
 
 private inline fun <reified E : Enum<E>> enumOrNull(name: String?): E? = enumValues<E>().firstOrNull { it.name == name }

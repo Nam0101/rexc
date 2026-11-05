@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Auto Backup up to Android 11. The host cache (session titles, cwds, agent prompts) stays on the phone. -->
+<full-backup-content>
+    <exclude domain="file" path="cache/" />
+</full-backup-content>

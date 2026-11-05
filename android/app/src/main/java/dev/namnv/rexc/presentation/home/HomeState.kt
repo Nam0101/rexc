@@ -10,6 +10,7 @@ import uniffi.rexc_ffi.HostStatus
 import uniffi.rexc_ffi.InboxItem
 import uniffi.rexc_ffi.ProgramState
 import uniffi.rexc_ffi.Session
+import uniffi.rexc_ffi.TerminalTheme
 
 /** UI state owned by [HomeViewModel] and rendered by [HomeScreen]. */
 @Immutable
@@ -24,6 +25,8 @@ data class HomeUiState(
   val refreshing: Boolean = false,
   /** Background alerts are on but Android may still freeze the app: offer the battery exemption. */
   val batteryHint: Boolean = false,
+  /** The built-in terminal themes, for the host editor's picker. */
+  val terminalThemes: ImmutableList<TerminalTheme> = persistentListOf(),
 )
 
 @Immutable
@@ -37,6 +40,10 @@ data class HostUi(
   val collapsed: Boolean = false,
   /** The most urgent program state across all sessions, shown when the card is folded. */
   val state: ProgramState? = null,
+  /** [sessions] are not live: cached from an earlier run or kept from before the connection went. */
+  val stale: Boolean = false,
+  /** When stale [sessions] were last known live (unix ms). */
+  val asOfMs: Long? = null,
 )
 
 @Immutable
@@ -67,6 +74,8 @@ data class InboxUi(
   val preview: String? = null,
   /** A quick reply to this pane is in flight. */
   val sending: Boolean = false,
+  /** Built from a stale host state; a reply still goes out, the engine re-checks first. */
+  val stale: Boolean = false,
 )
 
 /** The add/edit host sheet. [hostId] is null for a new host. */
@@ -76,6 +85,8 @@ data class HostEditor(
   val name: String,
   val address: String,
   val backgroundAlerts: Boolean = false,
+  /** The host's terminal theme; null follows the app's. */
+  val theme: String? = null,
   val error: String? = null,
   val saving: Boolean = false,
 )
@@ -84,6 +95,9 @@ sealed interface HomeUiEvent {
   data object AddHostClicked : HomeUiEvent
   data class EditHostClicked(val hostId: String) : HomeUiEvent
   data class EditorChanged(val name: String, val address: String, val backgroundAlerts: Boolean) : HomeUiEvent
+
+  /** A built-in theme name, or null to follow the app's. */
+  data class EditorThemeChanged(val theme: String?) : HomeUiEvent
   data object SaveHost : HomeUiEvent
   data object DismissEditor : HomeUiEvent
   data class RemoveHost(val hostId: String) : HomeUiEvent
@@ -137,6 +151,8 @@ fun Host.toUi(collapsed: Boolean = false, inbox: List<InboxItem> = emptyList()):
     sessions = ui.toImmutableList(),
     collapsed = collapsed,
     state = ui.map { it.state }.mostUrgent(),
+    stale = stale,
+    asOfMs = asOfMs,
   )
 }
 
@@ -165,4 +181,5 @@ fun InboxItem.toUi(): InboxUi = InboxUi(
   title = title,
   message = message,
   where = listOf(hostName, sessionLabel, windowLabel).filter { it.isNotBlank() }.joinToString(" › "),
+  stale = stale,
 )

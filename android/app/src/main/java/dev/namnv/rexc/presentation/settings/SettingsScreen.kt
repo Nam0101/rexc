@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -19,6 +20,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Vibration
@@ -55,6 +57,7 @@ import dev.namnv.rexc.data.MAX_FONT_SIZE
 import dev.namnv.rexc.data.MIN_FONT_SIZE
 import dev.namnv.rexc.data.OpenMode
 import dev.namnv.rexc.data.ThemeMode
+import dev.namnv.rexc.presentation.common.TerminalColorsRow
 
 private const val REPO_URL = "https://github.com/Nam0101/rexc"
 private const val SIZE_STEP = 0.5f
@@ -82,6 +85,7 @@ fun SettingsScreen(
   onEvent: (SettingsUiEvent) -> Unit,
   onBack: () -> Unit,
   modifier: Modifier = Modifier,
+  lockAvailable: Boolean = true,
 ) {
   Scaffold(
     modifier = modifier.fillMaxSize(),
@@ -102,6 +106,7 @@ fun SettingsScreen(
       AppearanceSection(state, onEvent)
       TerminalSection(state, onEvent)
       FeedbackSection(state, onEvent)
+      PrivacySection(state.settings.appLock, lockAvailable, onEvent)
       AboutSection(state.version)
     }
   }
@@ -169,6 +174,14 @@ private fun FontSizeRow(size: Float, family: FontFamily, onCommit: (Float) -> Un
 private fun TerminalSection(state: SettingsUiState, onEvent: (SettingsUiEvent) -> Unit) {
   val s = state.settings
   Section("Terminal", Icons.Default.Terminal) {
+    TerminalColorsRow(
+      themes = state.terminalThemes,
+      selected = s.terminalTheme,
+      unsetLabel = "From server",
+      onSelect = { onEvent(SettingsUiEvent.TerminalThemeChanged(it)) },
+      contentPadding = PaddingValues(horizontal = Space.l, vertical = Space.m),
+    )
+    Divider()
     RadioRow(
       label = "Fit this screen",
       detail = "Opening a pane resizes it to your phone, like taking the keyboard.",
@@ -209,6 +222,24 @@ private fun FeedbackSection(state: SettingsUiState, onEvent: (SettingsUiEvent) -
       detail = "A short tick on keys, selection and long presses.",
       checked = state.settings.haptics,
       onChange = { onEvent(SettingsUiEvent.HapticsChanged(it)) },
+    )
+  }
+}
+
+/** Without a screen lock there is nothing to ask for: the switch stays off and says why. */
+@Composable
+private fun PrivacySection(appLock: Boolean, available: Boolean, onEvent: (SettingsUiEvent) -> Unit) {
+  Section("Privacy", Icons.Default.Lock) {
+    SwitchRow(
+      title = "App lock",
+      detail = if (available || appLock) {
+        "Ask for your fingerprint or screen lock on launch and after 30 s away."
+      } else {
+        "Set a screen lock on this phone first."
+      },
+      checked = appLock,
+      enabled = available || appLock,
+      onChange = { onEvent(SettingsUiEvent.AppLockChanged(it)) },
     )
   }
 }

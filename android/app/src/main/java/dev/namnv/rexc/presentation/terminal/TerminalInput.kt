@@ -114,6 +114,11 @@ class TerminalInput(private val context: Context) {
     terminal?.paste(s)
   }
 
+  /** Types [s] at the prompt, without Enter. */
+  fun insert(s: String) {
+    terminal?.insert(s)
+  }
+
   fun copy(s: String) {
     context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Terminal", s))
   }

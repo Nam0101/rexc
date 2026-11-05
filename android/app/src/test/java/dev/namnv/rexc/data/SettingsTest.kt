@@ -23,9 +23,18 @@ class SettingsTest {
       theme = ThemeMode.TERMINAL,
       dynamicColor = false,
       confirmClosePane = false,
+      appLock = true,
+      terminalTheme = "Nightfox",
     )
     val prefs = mutablePreferencesOf().apply { write(custom) }
     assertEquals(custom, prefs.toSettings())
+  }
+
+  @Test
+  fun write_fromServerTerminalColorsRemovesTheStoredTheme() {
+    val prefs = mutablePreferencesOf().apply { write(Settings(terminalTheme = "Nightfox")) }
+    prefs.write(Settings(terminalTheme = null))
+    assertEquals(null, prefs.toSettings().terminalTheme)
   }
 
   @Test

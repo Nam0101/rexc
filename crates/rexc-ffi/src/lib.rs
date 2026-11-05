@@ -19,6 +19,8 @@ pub enum RexcError {
     NoHost,
     NoTerminal,
     Offline,
+    /// A reply's prompt is gone (answered, changed, or the program moved on); nothing was typed.
+    NotWaiting,
     Client(String),
     Io(String),
 }
@@ -29,6 +31,7 @@ impl std::fmt::Display for RexcError {
             Self::NoHost => f.write_str("no such host"),
             Self::NoTerminal => f.write_str("no such terminal"),
             Self::Offline => f.write_str("host is not connected"),
+            Self::NotWaiting => f.write_str(&core::EngineError::NotWaiting.to_string()),
             Self::Client(d) | Self::Io(d) => f.write_str(d),
         }
     }
@@ -42,6 +45,7 @@ impl From<core::EngineError> for RexcError {
             core::EngineError::NoHost => Self::NoHost,
             core::EngineError::NoTerminal => Self::NoTerminal,
             core::EngineError::Offline => Self::Offline,
+            core::EngineError::NotWaiting => Self::NotWaiting,
             core::EngineError::Client(c) => Self::Client(c.to_string()),
             core::EngineError::Io(i) => Self::Io(i.to_string()),
             core::EngineError::Connect(m) => Self::Client(m),
@@ -178,6 +182,11 @@ pub struct Host {
     pub sessions: Vec<Session>,
     /// Other clients on the server: id to display name.
     pub clients: Vec<ClientLabel>,
+    /// `sessions` are not live: cached from an earlier run, or kept from before the connection
+    /// went away. False again once a connect's full snapshot is in.
+    pub stale: bool,
+    /// When stale `sessions` were last known live (unix ms).
+    pub as_of_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -256,6 +265,8 @@ fn host(h: &core::HostState) -> Host {
             })
             .collect(),
         clients: h.clients.iter().map(|(k, v)| ClientLabel { client_id: k.clone(), display: v.clone() }).collect(),
+        stale: h.stale,
+        as_of_ms: h.as_of_ms,
     }
 }
 
@@ -265,6 +276,18 @@ pub struct HostRecord {
     pub name: String,
     pub address: String,
     pub background_alerts: bool,
+    /// The host's built-in terminal theme; `None` follows the app's.
+    pub theme: Option<String>,
+}
+
+/// A built-in terminal theme, with the colors a picker swatch needs (ARGB).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct TerminalTheme {
+    pub name: String,
+    pub background: u32,
+    pub foreground: u32,
+    /// The 16 ANSI colors, 0 to 15.
+    pub palette: Vec<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -289,6 +312,8 @@ pub struct InboxItem {
     pub title: Option<String>,
     pub message: Option<String>,
     pub updated_at: Option<String>,
+    /// Built from a stale host state; see [`Host::stale`].
+    pub stale: bool,
 }
 
 impl From<core::InboxItem> for InboxItem {
@@ -307,6 +332,7 @@ impl From<core::InboxItem> for InboxItem {
             title: i.title,
             message: i.message,
             updated_at: i.updated_at,
+            stale: i.stale,
         }
     }
 }
@@ -315,7 +341,8 @@ impl From<core::InboxItem> for InboxItem {
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum AlertKind {
-    Blocked { kind: Option<String> },
+    /// `message` is the status's own, unsanitised: hand it back in the reply's [`Prompt`].
+    Blocked { kind: Option<String>, message: Option<String> },
     Done,
     Error,
     Notification,
@@ -343,6 +370,15 @@ pub enum Event {
     Alert { alert: Alert },
     Clipboard { host_id: String, text: String },
     OpenUrl { url: String },
+    /// The bell rang in this terminal's block (throttled per terminal).
+    Bell { terminal_id: u64 },
+}
+
+/// What a reply answers: the Blocked alert's or inbox item's kind and message, as it had them.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct Prompt {
+    pub kind: Option<String>,
+    pub message: Option<String>,
 }
 
 impl From<core::Event> for Event {
@@ -361,7 +397,7 @@ impl From<core::Event> for Event {
                     block_id: a.block_id,
                     window_label: a.window_label,
                     kind: match a.kind {
-                        core::AlertKind::Blocked { kind } => AlertKind::Blocked { kind },
+                        core::AlertKind::Blocked { kind, msg } => AlertKind::Blocked { kind, message: msg },
                         core::AlertKind::Done => AlertKind::Done,
                         core::AlertKind::Error => AlertKind::Error,
                         core::AlertKind::Notification => AlertKind::Notification,
@@ -372,6 +408,7 @@ impl From<core::Event> for Event {
             },
             core::Event::Clipboard { host_id, text } => Self::Clipboard { host_id, text },
             core::Event::OpenUrl { url } => Self::OpenUrl { url },
+            core::Event::Bell { terminal_id } => Self::Bell { terminal_id },
         }
     }
 }
@@ -672,7 +709,7 @@ impl Rexc {
 
     // hosts
     pub fn hosts(&self) -> Vec<HostRecord> {
-        self.engine.hosts().into_iter().map(|h| HostRecord { host_id: h.id, name: h.name, address: h.address, background_alerts: h.background_alerts }).collect()
+        self.engine.hosts().into_iter().map(|h| HostRecord { host_id: h.id, name: h.name, address: h.address, background_alerts: h.background_alerts, theme: h.theme }).collect()
     }
     pub fn add_host(&self, name: String, address: String) -> Result<String> {
         Ok(self.engine.add_host(&name, &address)?)
@@ -682,6 +719,25 @@ impl Rexc {
     }
     pub fn remove_host(&self, host_id: String) -> Result<()> {
         Ok(self.engine.remove_host(&host_id)?)
+    }
+    /// A host's own terminal theme (a name from `terminal_themes`); `None` follows the app's.
+    pub fn set_host_theme(&self, host_id: String, theme: Option<String>) -> Result<()> {
+        Ok(self.engine.set_host_theme(&host_id, theme.as_deref())?)
+    }
+    /// The app's terminal theme (a name from `terminal_themes`); `None` draws the server's colors.
+    pub fn set_terminal_theme(&self, theme: Option<String>) {
+        self.engine.set_terminal_theme(theme.as_deref());
+    }
+    /// The built-in terminal themes, in picker order.
+    pub fn terminal_themes(&self) -> Vec<TerminalTheme> {
+        core::themes::names()
+            .into_iter()
+            .filter_map(|name| {
+                let t = core::themes::builtin(name)?;
+                let argb = |c: Option<core::Rgb>| c.unwrap_or_default().argb();
+                Some(TerminalTheme { name: name.to_string(), background: argb(t.background), foreground: argb(t.foreground), palette: (0..16).map(|i| argb(t.palette_color(i))).collect() })
+            })
+            .collect()
     }
     pub fn move_host(&self, host_id: String, before_host_id: Option<String>) -> Result<()> {
         Ok(self.engine.move_host(&host_id, before_host_id.as_deref())?)
@@ -717,9 +773,12 @@ impl Rexc {
 
     // sessions and layout (each blocks until the server answers; call off the main thread)
     /// Type `text` (and Enter, unless `enter` is false) into a pane without opening it; connects first if needed.
+    /// `answers`: the Blocked alert or inbox item this replies to. Then nothing is typed, and
+    /// `NotWaiting` comes back, unless the pane still waits on that prompt. Null for anything else.
     #[uniffi::method(default(enter = true))]
-    pub fn quick_reply(&self, host_id: String, session_id: String, block_id: String, text: String, enter: bool) -> Result<()> {
-        Ok(self.engine.quick_reply(&host_id, &session_id, &block_id, &text, enter)?)
+    pub fn quick_reply(&self, host_id: String, session_id: String, block_id: String, text: String, answers: Option<Prompt>, enter: bool) -> Result<()> {
+        let answers = answers.map(|p| core::Prompt { kind: p.kind, msg: p.message });
+        Ok(self.engine.quick_reply(&host_id, &session_id, &block_id, &text, enter, answers.as_ref())?)
     }
 
     /// The device's network changed: reconnect now or verify the live connections.
@@ -786,6 +845,11 @@ impl Rexc {
     pub fn close_terminal(&self, terminal_id: u64) {
         self.engine.close_terminal(terminal_id);
     }
+    /// The terminal is on screen now (`visible`), or no longer is. While the app is in the
+    /// foreground, the block of the visible terminal raises no alerts.
+    pub fn set_terminal_visible(&self, terminal_id: u64, visible: bool) {
+        self.engine.set_terminal_visible(terminal_id, visible);
+    }
     pub fn terminal_info(&self, terminal_id: u64) -> Result<TerminalInfo> {
         Ok(self.engine.terminal_info(terminal_id)?.into())
     }
@@ -828,6 +892,11 @@ impl Rexc {
     }
     pub fn terminal_paste(&self, terminal_id: u64, text: String) -> Result<()> {
         Ok(self.engine.terminal_paste(terminal_id, &text)?)
+    }
+    /// Type text in and never press Enter: a bracketed paste when the program asked for
+    /// one, else the line breaks become spaces and other control characters but tab go.
+    pub fn terminal_insert(&self, terminal_id: u64, text: String) -> Result<()> {
+        Ok(self.engine.terminal_insert(terminal_id, &text)?)
     }
     pub fn terminal_scroll(&self, terminal_id: u64, delta_rows: i32, col: u16, row: u16) -> Result<()> {
         Ok(self.engine.terminal_scroll(terminal_id, delta_rows, col, row)?)

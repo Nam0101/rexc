@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import uniffi.rexc_ffi.InboxItem
 import uniffi.rexc_ffi.ProgramState
+import uniffi.rexc_ffi.Prompt
 import uniffi.rexc_ffi.RexcException
 
 private const val PREVIEW_LINES = 4u
@@ -67,6 +68,7 @@ class HomeViewModel @Inject constructor(private val repo: EngineRepository) :
       busyHostId = l.busyHostId,
       refreshing = l.refreshing,
       batteryHint = battery && !l.batteryHintDismissed,
+      terminalThemes = repo.terminalThemes,
     )
   }.stateIn(viewModelScope, WHILE_UI_SUBSCRIBED, HomeUiState())
 
@@ -106,6 +108,7 @@ class HomeViewModel @Inject constructor(private val repo: EngineRepository) :
   fun onEvent(event: HomeUiEvent) {
     when (event) {
       HomeUiEvent.AddHostClicked, is HomeUiEvent.EditHostClicked, is HomeUiEvent.EditorChanged,
+      is HomeUiEvent.EditorThemeChanged,
       HomeUiEvent.SaveHost, HomeUiEvent.DismissEditor, HomeUiEvent.AllowBattery, HomeUiEvent.DismissBatteryHint,
       -> onSecondaryEvent(event)
       is HomeUiEvent.RemoveHost -> run { repo.call { removeHost(event.hostId) } }
@@ -134,7 +137,9 @@ class HomeViewModel @Inject constructor(private val repo: EngineRepository) :
       is HomeUiEvent.EditHostClicked -> viewModelScope.launch {
         val record = repo.call { hosts().firstOrNull { it.hostId == event.hostId } } ?: return@launch
         local.update {
-          it.copy(editor = HostEditor(record.hostId, record.name, record.address, record.backgroundAlerts))
+          it.copy(
+            editor = HostEditor(record.hostId, record.name, record.address, record.backgroundAlerts, record.theme),
+          )
         }
       }
       is HomeUiEvent.EditorChanged -> local.update {
@@ -147,6 +152,7 @@ class HomeViewModel @Inject constructor(private val repo: EngineRepository) :
           ),
         )
       }
+      is HomeUiEvent.EditorThemeChanged -> local.update { it.copy(editor = it.editor?.copy(theme = event.theme)) }
       HomeUiEvent.SaveHost -> saveHost()
       HomeUiEvent.DismissEditor -> local.update { it.copy(editor = null) }
       else -> Unit
@@ -178,7 +184,9 @@ class HomeViewModel @Inject constructor(private val repo: EngineRepository) :
     local.update { it.copy(sending = it.sending + item.blockId) }
     viewModelScope.launch {
       try {
-        repo.call { quickReply(item.hostId, item.sessionId, item.blockId, text) }
+        // A reply to a waiting program answers its prompt: the engine refuses it once that is gone.
+        val prompt = if (item.state == ProgramState.BLOCKED) Prompt(item.kind, item.message) else null
+        repo.call { quickReply(item.hostId, item.sessionId, item.blockId, text, prompt) }
       } catch (e: RexcException) {
         effects.trySend(HomeEffect.Message(e.message ?: "Could not send"))
       } finally {
@@ -200,12 +208,14 @@ class HomeViewModel @Inject constructor(private val repo: EngineRepository) :
     viewModelScope.launch {
       try {
         val id = repo.call {
-          if (editor.hostId == null) {
+          val id = if (editor.hostId == null) {
             addHost(name, editor.address.trim())
           } else {
             updateHost(editor.hostId, name, editor.address.trim(), editor.backgroundAlerts)
             editor.hostId
           }
+          setHostTheme(id, editor.theme)
+          id
         }
         repo.call { connect(id) }
         local.update { it.copy(editor = null) }

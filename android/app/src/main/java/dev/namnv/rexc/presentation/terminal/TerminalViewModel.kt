@@ -15,6 +15,7 @@ import dev.namnv.rexc.data.OpenMode
 import dev.namnv.rexc.data.SettingsRepository
 import dev.namnv.rexc.data.TerminalController
 import dev.namnv.rexc.navigation.Terminal
+import dev.namnv.rexc.presentation.share.PendingShare
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.Job
@@ -22,6 +23,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -29,6 +31,7 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
@@ -38,6 +41,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import uniffi.rexc_ffi.Event
 import uniffi.rexc_ffi.Frame
 import uniffi.rexc_ffi.Host
@@ -47,6 +51,9 @@ import uniffi.rexc_ffi.RexcException
 import uniffi.rexc_ffi.TerminalInfo
 
 private const val SEARCH_DEBOUNCE_MS = 150L
+
+/** How long a shared text waits for its pane's snapshot before it is dropped. */
+private const val SHARE_WAIT_MS = 15_000L
 
 /** The palette entry that opens the find bar; the id dock-palette registered. */
 private const val REQUEST_FIND = "find"
@@ -61,6 +68,7 @@ class TerminalViewModel @AssistedInject constructor(
   private val repo: EngineRepository,
   private val settings: SettingsRepository,
   private val dispatchers: AppCoroutineDispatchers,
+  private val shares: PendingShare,
 ) : ViewModel(),
   HasEventFlow<TerminalEffect> {
   @AssistedFactory
@@ -131,6 +139,15 @@ class TerminalViewModel @AssistedInject constructor(
     }
   }
 
+  /** Bells rung in the current pane (the engine already drops bursts). Collected only while on screen. */
+  val bells: Flow<Unit> = opened.flatMapLatest { op ->
+    if (op == null) {
+      emptyFlow()
+    } else {
+      repo.events.filterIsInstance<Event.Bell>().filter { it.terminalId == op.controller.id }.map { }
+    }
+  }
+
   init {
     viewModelScope.launch {
       resolved.map { it.block?.blockId }.distinctUntilChanged().collect { switchTo(it) }
@@ -143,6 +160,9 @@ class TerminalViewModel @AssistedInject constructor(
       }
     }
     viewModelScope.launch {
+      shares.pending.filter { it?.target == key }.collectLatest { pasteShare() }
+    }
+    viewModelScope.launch {
       repo.events.filterIsInstance<Event.OpenUrl>().collect { effects.trySend(TerminalEffect.OpenUrl(it.url)) }
     }
     viewModelScope.launch {
@@ -152,6 +172,35 @@ class TerminalViewModel @AssistedInject constructor(
         tabOrder.update { order -> order?.takeIf { it != ids && it.size == ids.size && it.containsAll(ids) } }
       }
     }
+  }
+
+  /**
+   * Text shared to this terminal: its pane shown once, then typed in once that pane has its snapshot
+   * (bracketed when the program asked, else on one line), never with Enter. Dropped with a message
+   * when the pane is gone or doesn't come up in time.
+   */
+  private suspend fun pasteShare() {
+    val blockId = key.blockId
+    if (blockId != null) {
+      val s = session.first()
+      if (s != null && s.windows.none { w -> w.blocks.any { it.blockId == blockId } }) {
+        dropShare("That pane is gone — nothing was pasted")
+        return
+      }
+      selection.value = Selection(blockId = blockId)
+    }
+    val op = withTimeoutOrNull(SHARE_WAIT_MS) {
+      opened.filterNotNull().first { (blockId == null || it.blockId == blockId) && it.info?.hasSnapshot == true }
+    }
+    if (op == null) {
+      dropShare("Couldn't reach the pane — nothing was pasted")
+    } else {
+      shares.take(key)?.let(op.controller::insert)
+    }
+  }
+
+  private fun dropShare(message: String) {
+    if (shares.take(key) != null) effects.trySend(TerminalEffect.Message(message))
   }
 
   private suspend fun switchTo(blockId: String?) {
