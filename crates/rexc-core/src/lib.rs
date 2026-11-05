@@ -31,6 +31,16 @@ pub use store::{HostRecord, LastPosition};
 use terminal::{TermCmd, TerminalRegistry};
 pub use terminal::{SizeMode, StreamState, TerminalInfo, Viewport};
 
+/// One thing the server can do on request, for a command palette.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Action {
+    pub name: String,
+    pub title: String,
+    pub description: String,
+    pub category: String,
+    pub keywords: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum AlertKind {
     /// A program waits for you; `kind` is permission, question, or auth.
@@ -331,6 +341,23 @@ impl Engine {
             Ok::<_, EngineError>(content)
         })?;
         Ok(tail_lines(&text, lines))
+    }
+
+    /// The server's own actions (configuration file and block actions), for a palette.
+    pub fn actions(&self, host_id: &str) -> Result<Vec<Action>> {
+        // The server lists its actions only when the request names at least one of ours.
+        let payload = json!({"actions": [{"name": "rexc.palette"}], "server_actions": "all"});
+        Ok(parse_actions(&self.call(host_id, "client.keymap", payload)?))
+    }
+
+    /// Run a server action on a session, on `block_id` or else the session's focused pane.
+    pub fn run_action(&self, host_id: &str, session_id: &str, block_id: Option<&str>, action: &str) -> Result<()> {
+        let mut payload = json!({"action": action, "origin": "palette", "session_id": session_id});
+        if let Some(b) = block_id {
+            payload["block_id"] = json!(b);
+        }
+        self.call(host_id, "client.action", payload)?;
+        Ok(())
     }
 
     pub fn new_session(&self, host_id: &str, label: Option<&str>) -> Result<String> {
@@ -695,6 +722,20 @@ fn reply_data(text: &str, enter: bool) -> String {
     if enter { format!("{text}\r") } else { text.to_owned() }
 }
 
+/// The actions a person can pick from a `client.keymap` reply: those with a title.
+/// Block methods have none (they are for bindings), and the client's own are ours to list.
+fn parse_actions(reply: &Value) -> Vec<Action> {
+    let text = |a: &Value, key: &str| a[key].as_str().unwrap_or_default().trim().to_owned();
+    reply["actions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|a| a["kind"].as_str() != Some("client"))
+        .map(|a| Action { name: text(a, "name"), title: text(a, "title"), description: text(a, "description"), category: text(a, "category"), keywords: text(a, "keywords") })
+        .filter(|a| !a.name.is_empty() && !a.title.is_empty())
+        .collect()
+}
+
 /// The last `n` non-blank lines, joined.
 fn tail_lines(text: &str, n: usize) -> String {
     let lines: Vec<&str> = text.lines().map(str::trim_end).filter(|l| !l.is_empty()).collect();
@@ -717,6 +758,21 @@ mod tests {
         assert_eq!(reply_data("y\n", true), "y\r");
         assert_eq!(reply_data("y", false), "y");
         assert_eq!(reply_data("\u{1b}", false), "\u{1b}");
+    }
+
+    #[test]
+    fn parses_only_titled_server_actions() {
+        let reply = json!({"actions": [
+            {"name": "dev_layout", "kind": "lua", "title": " Open Dev Layout ", "category": "Actions", "keywords": "dev"},
+            {"name": "com.superlogical.terminal.reset", "kind": "block", "title": "Reset Terminal", "description": "Clear state"},
+            {"name": "com.superlogical.terminal.write", "kind": "block", "args": {}},
+            {"name": "pane.split", "kind": "client", "title": "Split Pane"},
+        ]});
+        let got = parse_actions(&reply);
+        assert_eq!(got.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["dev_layout", "com.superlogical.terminal.reset"]);
+        assert_eq!(got[0], Action { name: "dev_layout".into(), title: "Open Dev Layout".into(), category: "Actions".into(), keywords: "dev".into(), ..Default::default() });
+        assert_eq!(got[1].description, "Clear state");
+        assert!(parse_actions(&json!({})).is_empty());
     }
 
     #[test]

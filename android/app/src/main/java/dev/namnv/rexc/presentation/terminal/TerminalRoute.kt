@@ -16,7 +16,13 @@ import dev.namnv.rexc.presentation.common.CollectSideEffect
 
 /** Stateful host for one session's terminal. */
 @Composable
-fun TerminalRoute(key: Terminal, onBack: () -> Unit, modifier: Modifier = Modifier) {
+fun TerminalRoute(
+  key: Terminal,
+  onBack: () -> Unit,
+  modifier: Modifier = Modifier,
+  onOpen: (Terminal) -> Unit = {},
+  onRequest: (String) -> Unit = {},
+) {
   val viewModel: TerminalViewModel =
     hiltViewModel<TerminalViewModel, TerminalViewModel.Factory>(key = key.toString()) { it.create(key) }
   val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -28,6 +34,8 @@ fun TerminalRoute(key: Terminal, onBack: () -> Unit, modifier: Modifier = Modifi
   viewModel.eventFlow.CollectSideEffect { effect ->
     when (effect) {
       is TerminalEffect.Message -> snackbar.showSnackbar(effect.text)
+      is TerminalEffect.OpenTerminal -> onOpen(effect.terminal)
+      is TerminalEffect.Request -> onRequest(effect.id)
       is TerminalEffect.OpenUrl -> runCatching {
         context.startActivity(Intent(Intent.ACTION_VIEW, effect.url.toUri()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
       }

@@ -2,6 +2,7 @@ package dev.namnv.rexc.presentation.terminal
 
 import androidx.compose.runtime.Immutable
 import dev.namnv.rexc.data.TerminalController
+import dev.namnv.rexc.navigation.Terminal
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
@@ -32,6 +33,8 @@ data class TerminalUiState(
   val gone: Boolean = false,
   /** Position of the current pane in reading order across tabs; drives the slide direction. */
   val paneOrdinal: Int = 0,
+  val hostId: String = "",
+  val sessionId: String = "",
 )
 
 @Immutable
@@ -44,6 +47,11 @@ data class PaneUi(
   val state: ProgramState?,
   val ownerLabel: String?,
   val ownedByMe: Boolean,
+  /** Where the pane sits in its tab, as fractions of the tab (0..1), for the layout map. */
+  val x: Float = 0f,
+  val y: Float = 0f,
+  val w: Float = 1f,
+  val h: Float = 1f,
 )
 
 enum class StreamUi { CONNECTING, LIVE, RECONNECTING, ENDED }
@@ -83,11 +91,26 @@ sealed interface TerminalUiEvent {
   data object Release : TerminalUiEvent
   data object Clear : TerminalUiEvent
   data class OpenUrl(val url: String) : TerminalUiEvent
+
+  /** The palette, switcher and layout map act on panes other than the shown one. */
+  sealed interface SheetEvent : TerminalUiEvent
+
+  /** Show [terminal]: a pane of this session is selected, any other is opened by the host screen. */
+  data class Open(val terminal: Terminal) : SheetEvent
+  data class CloseBlock(val blockId: String) : SheetEvent
+  data class FocusOnDesktop(val blockId: String) : SheetEvent
+
+  /** A palette action the terminal cannot run itself (`find`, `settings`); forwarded as [TerminalEffect.Request]. */
+  data class Request(val id: String) : SheetEvent
 }
 
 sealed interface TerminalEffect {
   data class Message(val text: String) : TerminalEffect
   data class OpenUrl(val url: String) : TerminalEffect
+
+  /** Navigate to a pane of another session. */
+  data class OpenTerminal(val terminal: Terminal) : TerminalEffect
+  data class Request(val id: String) : TerminalEffect
 }
 
 /** What the user picked; resolved against the live session by [resolveSelection]. */
@@ -126,12 +149,19 @@ fun Window.toTab(): TabUi = TabUi(
   state = blocks.mapNotNull { it.state }.minByOrNull { urgencyOf(it) },
 )
 
+/** What a pane is called on screen. */
+fun Block.paneName(): String = displayTitle ?: app ?: process ?: pwdShort ?: "shell"
+
 fun Block.toPane(): PaneUi = PaneUi(
   blockId = blockId,
-  name = displayTitle ?: app ?: process ?: pwdShort ?: "shell",
+  name = paneName(),
   state = state,
   ownerLabel = ownerLabel,
   ownedByMe = ownedByMe,
+  x = x.toFloat(),
+  y = y.toFloat(),
+  w = w.toFloat(),
+  h = h.toFloat(),
 )
 
 fun TerminalInfo.toUi(ownerLabel: String?): TerminalInfoUi = TerminalInfoUi(

@@ -1,5 +1,6 @@
 package dev.namnv.rexc.presentation.terminal
 
+import android.view.KeyEvent
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -100,6 +101,9 @@ fun TerminalScreen(
   var bridge by remember { mutableStateOf<ImeBridge?>(null) }
   var renaming by remember { mutableStateOf<Rename?>(null) }
   val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+  val sheets = rememberSheetsState()
+  val toggleKeyboard: () -> Unit = { bridge?.let { b -> if (imeVisible) b.hide() else b.show() } }
+  val copyScreen: () -> Unit = { state.terminal?.allText()?.takeIf { it.isNotEmpty() }?.let(input::copy) }
   Scaffold(
     modifier = modifier.fillMaxSize(),
     containerColor = chrome,
@@ -113,10 +117,11 @@ fun TerminalScreen(
         onEvent = onEvent,
         onBack = onBack,
         onRename = { renaming = it },
-        onCopyScreen = { state.terminal?.allText()?.takeIf { it.isNotEmpty() }?.let(input::copy) },
+        onCopyScreen = copyScreen,
+        onSheet = sheets::open,
       )
       TabsRow(state, ink, onEvent)
-      if (state.panes.size > 1) PaneStrip(state, ink, onEvent)
+      if (state.panes.size > 1) PaneStrip(state, ink, onEvent, onMap = { sheets.open(TerminalSheet.MAP) })
       HorizontalDivider(thickness = Dp.Hairline, color = ink.copy(alpha = HAIRLINE))
       PaneArea(
         state = state,
@@ -127,15 +132,18 @@ fun TerminalScreen(
         onBridge = { bridge = it },
         onBackground = { termBg = it },
         onEvent = onEvent,
+        onShortcut = sheets::onHardwareKey,
         modifier = Modifier.weight(1f).fillMaxWidth(),
       )
       Dock(
         input = input,
         keyboardVisible = imeVisible,
-        onToggleKeyboard = { bridge?.let { b -> if (imeVisible) b.hide() else b.show() } },
+        onToggleKeyboard = toggleKeyboard,
         background = chrome,
+        onOpenSheet = sheets::open,
       )
     }
+    TerminalSheets(sheets, state, SheetHost(onEvent, { renaming = it }, copyScreen, input::paste, toggleKeyboard))
   }
   renaming?.let { target -> RenameDialog(target, state, onDismiss = { renaming = null }, onEvent = onEvent) }
 }
@@ -152,6 +160,7 @@ private fun PaneArea(
   onBackground: (Color) -> Unit,
   onEvent: (TerminalUiEvent) -> Unit,
   modifier: Modifier,
+  onShortcut: (KeyEvent) -> Boolean = { false },
 ) {
   Box(modifier) {
     PaneCarousel(state) { shown ->
@@ -171,7 +180,9 @@ private fun PaneArea(
     AndroidView(
       factory = { ctx ->
         ImeBridge(ctx, input).also { v ->
-          v.onHardwareKey = { e -> input.hardwareKey(e) { d -> onEvent(TerminalUiEvent.SwipePane(d)) } }
+          v.onHardwareKey = { e ->
+            onShortcut(e) || input.hardwareKey(e) { d -> onEvent(TerminalUiEvent.SwipePane(d)) }
+          }
           onBridge(v)
         }
       },
@@ -288,6 +299,7 @@ private fun TopBar(
   onBack: () -> Unit,
   onRename: (Rename) -> Unit,
   onCopyScreen: () -> Unit,
+  onSheet: (TerminalSheet) -> Unit = {},
 ) {
   val onBg = onColor(background)
   Row(
@@ -321,7 +333,7 @@ private fun TopBar(
         )
       }
     }
-    PaneMenu(state, tint = onBg, onEvent = onEvent, onRename = onRename, onCopyScreen = onCopyScreen)
+    PaneMenu(state, tint = onBg, onEvent = onEvent, onRename = onRename, onCopyScreen = onCopyScreen, onSheet = onSheet)
   }
 }
 
@@ -332,6 +344,7 @@ private fun PaneMenu(
   onEvent: (TerminalUiEvent) -> Unit,
   onRename: (Rename) -> Unit,
   onCopyScreen: () -> Unit,
+  onSheet: (TerminalSheet) -> Unit = {},
 ) {
   var menu by remember { mutableStateOf(false) }
   fun pick(action: () -> Unit) {
@@ -341,6 +354,9 @@ private fun PaneMenu(
   Box {
     IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, contentDescription = "Menu", tint = tint) }
     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+      MenuEntry("Command palette") { pick { onSheet(TerminalSheet.PALETTE) } }
+      MenuEntry("Quick switcher") { pick { onSheet(TerminalSheet.SWITCHER) } }
+      MenuEntry("Pane map") { pick { onSheet(TerminalSheet.MAP) } }
       MenuEntry("New tab") { pick { onEvent(TerminalUiEvent.NewTab) } }
       MenuEntry("Split right") { pick { onEvent(TerminalUiEvent.Split(false)) } }
       MenuEntry("Split down") { pick { onEvent(TerminalUiEvent.Split(true)) } }
@@ -362,11 +378,13 @@ private fun PaneMenu(
 }
 
 @Composable
-private fun PaneStrip(state: TerminalUiState, ink: Color, onEvent: (TerminalUiEvent) -> Unit) {
+private fun PaneStrip(state: TerminalUiState, ink: Color, onEvent: (TerminalUiEvent) -> Unit, onMap: () -> Unit = {}) {
   LazyRow(
     contentPadding = PaddingValues(horizontal = Space.m, vertical = 2.dp),
     horizontalArrangement = Arrangement.spacedBy(Space.xs),
+    verticalAlignment = Alignment.CenterVertically,
   ) {
+    item(key = "map") { LayoutThumb(state, ink, onMap) }
     items(state.panes, key = { it.blockId }) { pane ->
       val selected = pane.blockId == state.currentBlockId
       Row(

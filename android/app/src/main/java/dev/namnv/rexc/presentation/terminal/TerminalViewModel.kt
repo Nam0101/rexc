@@ -84,8 +84,10 @@ class TerminalViewModel @AssistedInject constructor(
         info = current?.info?.toUi(r.block?.ownerLabel),
         gone = h != null && h.status == HostStatus.CONNECTED && s == null && h.sessions.isNotEmpty(),
         paneOrdinal = s?.paneOrdinal(r.block?.blockId) ?: 0,
+        hostId = key.hostId,
+        sessionId = key.sessionId,
       )
-    }.stateIn(viewModelScope, WHILE_UI_SUBSCRIBED, TerminalUiState())
+    }.stateIn(viewModelScope, WHILE_UI_SUBSCRIBED, TerminalUiState(hostId = key.hostId, sessionId = key.sessionId))
 
   /** Frames of the current terminal, built off the main thread and conflated to the drawing pace. */
   val frames: Flow<Frame> = opened.flatMapLatest { op ->
@@ -148,6 +150,7 @@ class TerminalViewModel @AssistedInject constructor(
         selection.value = Selection(blockId = next.blockId)
       }
       is TerminalUiEvent.TabEvent -> onTabEvent(event, state)
+      is TerminalUiEvent.SheetEvent -> onSheetEvent(event)
       is TerminalUiEvent.Split -> state.currentBlockId?.let { block ->
         call {
           val blockId = split(key.hostId, key.sessionId, block, event.vertical, null)
@@ -163,6 +166,22 @@ class TerminalViewModel @AssistedInject constructor(
         call { clearTerminal(key.hostId, key.sessionId, block) }
       }
       is TerminalUiEvent.OpenUrl -> effects.trySend(TerminalEffect.OpenUrl(event.url))
+    }
+  }
+
+  private fun onSheetEvent(event: TerminalUiEvent.SheetEvent) {
+    when (event) {
+      is TerminalUiEvent.Open -> {
+        val target = event.terminal
+        if (target.hostId == key.hostId && target.sessionId == key.sessionId) {
+          selection.value = Selection(blockId = target.blockId)
+        } else {
+          effects.trySend(TerminalEffect.OpenTerminal(target))
+        }
+      }
+      is TerminalUiEvent.CloseBlock -> call { closeBlock(key.hostId, key.sessionId, event.blockId) }
+      is TerminalUiEvent.FocusOnDesktop -> call { focusBlock(key.hostId, key.sessionId, event.blockId) }
+      is TerminalUiEvent.Request -> effects.trySend(TerminalEffect.Request(event.id))
     }
   }
 
