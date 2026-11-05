@@ -95,6 +95,10 @@ fun TerminalScreen(
   onEvent: (TerminalUiEvent) -> Unit,
   onBack: () -> Unit,
   modifier: Modifier = Modifier,
+  font: TerminalFont = TerminalFont.JETBRAINS_MONO,
+  fontSize: Float = DEFAULT_FONT_SP,
+  onFontSizeChanged: (Float) -> Unit = {},
+  localEcho: Boolean = true,
 ) {
   var termBg by remember { mutableStateOf<Color?>(null) }
   val chrome = termBg ?: Colors.bg
@@ -130,6 +134,7 @@ fun TerminalScreen(
       TabsRow(state, ink, send)
       if (state.panes.size > 1) PaneStrip(state, ink, send, onMap = { sheets.open(TerminalSheet.MAP) })
       HorizontalDivider(thickness = Dp.Hairline, color = ink.copy(alpha = HAIRLINE))
+      state.search?.let { SearchBar(it, ink, onEvent) }
       PaneArea(
         state = state,
         input = input,
@@ -140,6 +145,7 @@ fun TerminalScreen(
         onBackground = { termBg = it },
         onEvent = send,
         onShortcut = sheets::onHardwareKey,
+        canvas = CanvasSettings(font, fontSize, onFontSizeChanged, localEcho),
         modifier = Modifier.weight(1f).fillMaxWidth(),
       )
       Dock(
@@ -157,6 +163,15 @@ fun TerminalScreen(
   closing?.let { event -> ClosePaneDialog(onConfirm = { onEvent(event) }, onDismiss = { closing = null }) }
 }
 
+/** How the grid is drawn, as the user set it. */
+@Immutable
+private data class CanvasSettings(
+  val font: TerminalFont,
+  val fontSize: Float,
+  val onFontSizeChanged: (Float) -> Unit,
+  val localEcho: Boolean,
+)
+
 /** The grid with its keyboard bridge and the overlays over it. */
 @Composable
 private fun PaneArea(
@@ -168,6 +183,7 @@ private fun PaneArea(
   onBridge: (ImeBridge) -> Unit,
   onBackground: (Color) -> Unit,
   onEvent: (TerminalUiEvent) -> Unit,
+  canvas: CanvasSettings,
   modifier: Modifier,
   onShortcut: (KeyEvent) -> Boolean = { false },
 ) {
@@ -183,6 +199,10 @@ private fun PaneArea(
         onTap = { bridge?.let { b -> if (imeVisible) b.hide() else b.show() } },
         onBackground = onBackground,
         modifier = Modifier.fillMaxSize(),
+        font = canvas.font,
+        initialFontSize = canvas.fontSize,
+        onFontSizeChanged = canvas.onFontSizeChanged,
+        localEcho = canvas.localEcho,
       )
     }
     // The soft keyboard's raw input connection; invisible, focused on tap.
@@ -375,6 +395,7 @@ private fun PaneMenu(
         null -> Unit
       }
       MenuEntry("Copy screen") { pick(onCopyScreen) }
+      MenuEntry("Find") { pick { onEvent(TerminalUiEvent.OpenSearch) } }
       MenuEntry("Rename tab") { pick { onRename(Rename.TAB) } }
       MenuEntry("Rename session") { pick { onRename(Rename.SESSION) } }
       MenuEntry("Clear screen") { pick { onEvent(TerminalUiEvent.Clear) } }

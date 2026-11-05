@@ -35,7 +35,13 @@ data class TerminalUiState(
   val paneOrdinal: Int = 0,
   val hostId: String = "",
   val sessionId: String = "",
+  /** The find bar, while it is open. */
+  val search: SearchUi? = null,
 )
+
+/** The find bar: what was typed, how many matches the scrollback has, and which one is current (0-based). */
+@Immutable
+data class SearchUi(val query: String = "", val count: Int = 0, val current: Int? = null)
 
 @Immutable
 data class TabUi(val id: String, val name: String, val busy: Boolean, val state: ProgramState?)
@@ -102,6 +108,15 @@ sealed interface TerminalUiEvent {
 
   /** A palette action the terminal cannot run itself (`find`, `settings`); forwarded as [TerminalEffect.Request]. */
   data class Request(val id: String) : SheetEvent
+
+  /** The find bar's actions, handled together. */
+  sealed interface SearchEvent : TerminalUiEvent
+  data object OpenSearch : SearchEvent
+  data class SearchQuery(val query: String) : SearchEvent
+
+  /** Move the current match: -1 toward older output, +1 toward newer, wrapping. */
+  data class SearchNext(val delta: Int) : SearchEvent
+  data object CloseSearch : SearchEvent
 }
 
 sealed interface TerminalEffect {

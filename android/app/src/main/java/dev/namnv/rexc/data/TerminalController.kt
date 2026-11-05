@@ -13,9 +13,13 @@ import uniffi.rexc_ffi.TerminalInfo
  * non-blocking in the engine (frames are read from memory; input is queued),
  * so these are safe from the main thread during a gesture.
  */
+@Suppress("TooManyFunctions") // a facade: one method per engine call
 @Stable
 class TerminalController(private val engine: Rexc, val id: ULong) {
   fun frame(): Frame? = guard { engine.terminalFrame(id) }
+
+  /** The frame with only the rows changed after [since] (a previous frame's `rev`); the rest come back empty. */
+  fun frameSince(since: ULong): Frame? = guard { engine.terminalFrameSince(id, since) }
   fun info(): TerminalInfo? = guard { engine.terminalInfo(id) }
 
   fun setViewport(cols: Int, rows: Int, cellW: Int, cellH: Int) {
@@ -36,6 +40,10 @@ class TerminalController(private val engine: Rexc, val id: ULong) {
     guard { engine.terminalScroll(id, deltaRows, col.toUShort(), row.toUShort()) }
   }
 
+  /** A click at a cell for a mouse-tracking program; false when nothing was sent. */
+  fun click(col: Int, row: Int, right: Boolean): Boolean =
+    guard { engine.terminalClick(id, col.toUShort(), row.toUShort(), right) } ?: false
+
   fun scrollToBottom() {
     guard { engine.terminalScrollToBottom(id) }
   }
@@ -55,6 +63,21 @@ class TerminalController(private val engine: Rexc, val id: ULong) {
   fun selectionText(): String? = guard { engine.terminalSelectionText(id) }
   fun allText(): String = guard { engine.terminalAllText(id) }.orEmpty()
   fun linkAt(col: Int, row: Int): String? = guard { engine.terminalLinkAt(id, col.toUShort(), row.toUShort()) }
+
+  /** Show typed text ahead of the server's echo on slow links (never on fast ones). */
+  fun setLocalEcho(on: Boolean) {
+    guard { engine.terminalSetLocalEcho(id, on) }
+  }
+
+  /** Match count for [query] in the scrollback; the match nearest the bottom becomes current. */
+  fun search(query: String): Int = guard { engine.terminalSearch(id, query) }?.toInt() ?: 0
+
+  /** Move the current match by [delta] (positive goes down, wraps) and scroll to it; its index, if any. */
+  fun searchNext(delta: Int): Int? = guard { engine.terminalSearchNext(id, delta) }?.toInt()
+
+  fun searchClear() {
+    guard { engine.terminalSearchClear(id) }
+  }
 
   fun takeOver() {
     guard { engine.terminalTakeOver(id) }

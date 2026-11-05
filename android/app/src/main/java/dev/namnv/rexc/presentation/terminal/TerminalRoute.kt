@@ -22,6 +22,10 @@ fun TerminalRoute(
   modifier: Modifier = Modifier,
   onOpen: (Terminal) -> Unit = {},
   onRequest: (String) -> Unit = {},
+  font: TerminalFont = TerminalFont.JETBRAINS_MONO,
+  fontSize: Float = DEFAULT_FONT_SP,
+  onFontSizeChanged: (Float) -> Unit = {},
+  localEcho: Boolean = true,
 ) {
   val viewModel: TerminalViewModel =
     hiltViewModel<TerminalViewModel, TerminalViewModel.Factory>(key = key.toString()) { it.create(key) }
@@ -49,5 +53,9 @@ fun TerminalRoute(
     onEvent = viewModel::onEvent,
     onBack = onBack,
     modifier = modifier,
+    font = font,
+    fontSize = fontSize,
+    onFontSizeChanged = onFontSizeChanged,
+    localEcho = localEcho,
   )
 }

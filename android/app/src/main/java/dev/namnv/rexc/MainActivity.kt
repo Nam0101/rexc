@@ -25,6 +25,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
@@ -44,8 +45,10 @@ import dev.namnv.rexc.presentation.common.LocalSharedTransitionScope
 import dev.namnv.rexc.presentation.common.sharedBoundsFor
 import dev.namnv.rexc.presentation.home.HomeRoute
 import dev.namnv.rexc.presentation.settings.SettingsRoute
+import dev.namnv.rexc.presentation.terminal.TerminalFont
 import dev.namnv.rexc.presentation.terminal.TerminalRoute
 import javax.inject.Inject
+import kotlinx.coroutines.launch
 
 // Screens slide in from a quarter of the width; the rest is a fade.
 private const val NAV_SLIDE_DIVISOR = 4
@@ -140,6 +143,10 @@ class MainActivity : ComponentActivity() {
                       modifier = Modifier.sharedBoundsFor(key.sharedKey),
                       onOpen = { backStack.add(it) },
                       onRequest = { if (it == REQUEST_SETTINGS) backStack.add(Settings) },
+                      font = TerminalFont.fromKey(settings.font),
+                      fontSize = settings.fontSize,
+                      onFontSizeChanged = ::saveFontSize,
+                      localEcho = settings.localEcho,
                     )
                   }
                 },
@@ -149,6 +156,11 @@ class MainActivity : ComponentActivity() {
         }
       }
     }
+  }
+
+  /** A pinch on the grid changes the size for every terminal, like the Settings slider. */
+  private fun saveFontSize(size: Float) {
+    lifecycleScope.launch { settingsRepository.update { it.copy(fontSize = size) } }
   }
 
   override fun onNewIntent(intent: Intent) {
