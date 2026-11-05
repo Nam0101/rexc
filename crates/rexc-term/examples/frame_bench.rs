@@ -54,7 +54,9 @@ fn pct(v: &mut [u128], p: f64) -> u128 {
 /// Strings and vectors a frame hands to UniFFI, which lowers each one separately.
 fn weight(f: &Frame) -> (usize, usize, usize) {
     let runs: usize = f.lines.iter().map(|l| l.runs.len()).sum();
-    let bytes: usize = f.lines.iter().flat_map(|l| &l.runs).map(|r| r.text.len() + r.widths.len() + 24).sum();
+    // What the FFI sends per run: the text, 24 bytes of fields, and widths only when they say something.
+    let widths = |r: &rexc_term::Run| if r.widths.iter().all(|&w| w == 1) && r.widths.len() == r.text.chars().count() { 0 } else { r.widths.len() };
+    let bytes: usize = f.lines.iter().flat_map(|l| &l.runs).map(|r| r.text.len() + widths(r) + 24).sum();
     (f.lines.len(), runs, bytes)
 }
 

@@ -133,8 +133,38 @@ pub struct Row {
 }
 
 impl Row {
+    /// Drop the plain blank cells at both ends of the row: they paint nothing, and a row is
+    /// mostly them. Runs keep their `col`, so nothing moves.
+    fn trim_blank_ends(&mut self) {
+        let plain = |r: &Run| r.bg.is_none() && !r.selected && r.underline == Underline::None && !r.strikethrough && !r.overline;
+        if let Some(last) = self.runs.last_mut().filter(|r| plain(r)) {
+            let cut = last.text.len() - last.text.trim_end_matches(' ').len();
+            last.text.truncate(last.text.len() - cut);
+            last.widths.truncate(last.widths.len() - cut);
+            last.cells -= cut as u16;
+            if last.text.is_empty() {
+                self.runs.pop();
+            }
+        }
+        if let Some(first) = self.runs.first_mut().filter(|r| plain(r)) {
+            let cut = first.text.len() - first.text.trim_start_matches(' ').len();
+            first.text.drain(..cut);
+            first.widths.drain(..cut);
+            first.cells -= cut as u16;
+            first.col += cut as u16;
+        }
+    }
+
+    /// The row's text, blanks between runs restored; a row that ends in blanks comes back without them.
     pub fn text(&self) -> String {
-        self.runs.iter().map(|r| r.text.as_str()).collect()
+        let mut out = String::new();
+        let mut at = 0usize;
+        for r in &self.runs {
+            out.extend(std::iter::repeat_n(' ', (r.col as usize).saturating_sub(at)));
+            out.push_str(&r.text);
+            at = r.col as usize + r.cells as usize;
+        }
+        out
     }
 }
 
@@ -712,6 +742,7 @@ impl Terminal {
                         _ => run.text.push(' '),
                     }
                 }
+                row.trim_blank_ends();
                 lines.push(row);
             }
         }
@@ -1088,6 +1119,22 @@ mod tests {
         let at = t.frame_since(0).rev;
         t.select_line(1);
         assert!(t.frame_since(at).lines.iter().all(|l| l.dirty));
+    }
+
+    #[test]
+    fn blank_tails_are_not_sent_but_styled_blanks_are() {
+        let mut t = Terminal::new(12, 3);
+        t.write(b"ab  \x1b[44m  \x1b[0m   \r\n\x1b[4m  ");
+        let f = t.frame();
+        let r0 = &f.lines[0].runs;
+        assert_eq!(r0.iter().map(|r| (r.col, r.cells, r.text.as_str())).collect::<Vec<_>>(), [(0, 4, "ab  "), (4, 2, "  ")]);
+        assert_eq!(f.lines[1].runs.len(), 1, "an underlined blank is visible");
+        assert!(f.lines[2].runs.is_empty());
+        t.write(b"\x1b[0m\x1b[3;1H    indented");
+        let f = t.frame();
+        let run = &f.lines[2].runs[0];
+        assert_eq!((run.col, run.cells, run.text.as_str()), (4, 8, "indented"));
+        assert_eq!(f.lines[2].text(), "    indented", "text() puts the indent back");
     }
 
     #[test]
