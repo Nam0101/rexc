@@ -20,12 +20,15 @@ use crate::{Alert, AlertKind, Event};
 
 const MIN_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const VIEW_DEBOUNCE: Duration = Duration::from_millis(40);
 
 #[derive(Debug)]
 pub enum HostCmd {
     Connect,
     Disconnect,
+    /// The network changed: end a backoff wait, or check a live socket still answers.
+    Probe,
     /// Re-read a session's view (after a change we made ourselves).
     Refresh(String),
 }
@@ -242,7 +245,7 @@ async fn run(host: Arc<HostHandle>, mut cmd_rx: mpsc::UnboundedReceiver<HostCmd>
                 _ = tokio::time::sleep(backoff) => {}
                 cmd = cmd_rx.recv() => match cmd {
                     Some(HostCmd::Disconnect) => { wanted = false; token = None; host.set_status(HostStatus::Offline, None); }
-                    Some(HostCmd::Connect) => backoff = MIN_BACKOFF,
+                    Some(HostCmd::Connect | HostCmd::Probe) => backoff = MIN_BACKOFF,
                     Some(HostCmd::Refresh(_)) => {}
                     None => return,
                 }
@@ -325,10 +328,20 @@ async fn connected(host: &Arc<HostHandle>, control: Control, mut events: mpsc::U
             cmd = cmd_rx.recv() => match cmd {
                 Some(HostCmd::Disconnect) => return Outcome::Disconnect,
                 Some(HostCmd::Connect) => {}
+                Some(HostCmd::Probe) if !alive(&control).await => return Outcome::Dropped("no answer after a network change".into()),
+                Some(HostCmd::Probe) => {}
                 Some(HostCmd::Refresh(session_id)) => schedule_refresh(session_id),
                 None => return Outcome::Disconnect,
             },
         }
+    }
+}
+
+/// Whether the server answers within [`PROBE_TIMEOUT`]. Any reply counts, even an error: it crossed the wire.
+async fn alive(control: &Control) -> bool {
+    match tokio::time::timeout(PROBE_TIMEOUT, control.call("server.status", json!({}))).await {
+        Ok(Err(ClientError::Closed | ClientError::Timeout | ClientError::Io(_) | ClientError::WebSocket(_))) | Err(_) => false,
+        Ok(_) => true,
     }
 }
 

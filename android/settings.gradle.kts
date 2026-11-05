@@ -19,3 +19,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "rexc"
 include(":app")
+include(":baselineprofile")

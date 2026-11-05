@@ -7,6 +7,7 @@ import android.os.Build
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.namnv.rexc.BuildConfig
 import dev.namnv.rexc.alerts.AlertService
+import dev.namnv.rexc.alerts.BatteryOptimization
 import dev.namnv.rexc.alerts.Notifications
 import dev.namnv.rexc.core.dispatcher.AppCoroutineDispatchers
 import javax.inject.Inject
@@ -61,6 +62,11 @@ class EngineRepository @Inject constructor(
     MutableSharedFlow<Event>(extraBufferCapacity = 256, onBufferOverflow = BufferOverflow.DROP_OLDEST)
   val events: SharedFlow<Event> = _events.asSharedFlow()
 
+  private val _needsBatteryExemption = MutableStateFlow(false)
+
+  /** Some host wants background alerts but Android may still freeze the app: worth asking for the exemption. */
+  val needsBatteryExemption: StateFlow<Boolean> = _needsBatteryExemption.asStateFlow()
+
   @Volatile
   var inForeground: Boolean = false
 
@@ -78,6 +84,13 @@ class EngineRepository @Inject constructor(
 
   init {
     refresh()
+    NetworkWatcher(context, ::onNetworkChanged).start()
+  }
+
+  /** A new default network: skip the reconnect backoff, and check that connections that look open still are. */
+  private fun onNetworkChanged() {
+    if (inForeground) connectAll() else connectWatched()
+    engine.networkChanged()
   }
 
   private fun dispatch(event: Event) {
@@ -108,6 +121,7 @@ class EngineRepository @Inject constructor(
   /** Keeps [AlertService] running exactly while some host wants alerts in the background. */
   fun syncAlertService(force: Boolean = false) {
     val watched = watchedHosts()
+    _needsBatteryExemption.value = watched.isNotEmpty() && !BatteryOptimization.isIgnoring(context)
     val ids = watched.mapTo(HashSet()) { it.hostId }
     if (force || ids != watchedIds) {
       watchedIds = ids

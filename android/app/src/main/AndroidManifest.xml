@@ -7,6 +7,8 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- Background alerts: the foreground service that keeps the watched connections up. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- Lets the user exempt the app from Doze so background alerts survive (sideloaded, not on the store). -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <application
