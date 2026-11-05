@@ -81,6 +81,12 @@ pub enum Underline {
     Dashed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseButton {
+    Left,
+    Right,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CursorStyle {
     #[default]
@@ -511,6 +517,19 @@ impl Terminal {
     /// Bytes to send for a wheel step at a cell, when the program tracks the
     /// mouse (vim, less, htop). `None` when it doesn't: scroll history instead.
     pub fn wheel(&self, col: u16, row: u16, down: bool) -> Option<Vec<u8>> {
+        self.mouse_report(col, row, if down { vt::mouse::Button::Five } else { vt::mouse::Button::Four }, &[vt::mouse::Action::Press])
+    }
+
+    /// Bytes for a click (press then release) at a cell; `None` when the program doesn't track the mouse.
+    pub fn click(&self, col: u16, row: u16, button: MouseButton) -> Option<Vec<u8>> {
+        let button = match button {
+            MouseButton::Left => vt::mouse::Button::Left,
+            MouseButton::Right => vt::mouse::Button::Right,
+        };
+        self.mouse_report(col, row, button, &[vt::mouse::Action::Press, vt::mouse::Action::Release])
+    }
+
+    fn mouse_report(&self, col: u16, row: u16, button: vt::mouse::Button, actions: &[vt::mouse::Action]) -> Option<Vec<u8>> {
         if !self.mouse_tracking() {
             return None;
         }
@@ -528,12 +547,14 @@ impl Terminal {
             padding_right: 0,
             padding_left: 0,
         });
-        let mut ev = vt::mouse::Event::new().ok()?;
-        ev.set_action(vt::mouse::Action::Press);
-        ev.set_button(Some(if down { vt::mouse::Button::Five } else { vt::mouse::Button::Four }));
-        ev.set_position(vt::mouse::Position { x: (col.min(cols.saturating_sub(1)) as f32 + 0.5) * cw as f32, y: (row.min(rows.saturating_sub(1)) as f32 + 0.5) * ch as f32 });
-        let mut out = Vec::with_capacity(16);
-        enc.encode_to_vec(&ev, &mut out).ok()?;
+        let mut out = Vec::with_capacity(32);
+        for action in actions {
+            let mut ev = vt::mouse::Event::new().ok()?;
+            ev.set_action(*action);
+            ev.set_button(Some(button));
+            ev.set_position(vt::mouse::Position { x: (col.min(cols.saturating_sub(1)) as f32 + 0.5) * cw as f32, y: (row.min(rows.saturating_sub(1)) as f32 + 0.5) * ch as f32 });
+            enc.encode_to_vec(&ev, &mut out).ok()?;
+        }
         (!out.is_empty()).then_some(out)
     }
 
@@ -1087,6 +1108,16 @@ mod tests {
         let bytes = t.wheel(2, 1, true).unwrap();
         assert_eq!(bytes, b"\x1b[<65;3;2M");
         assert!(t.frame().mouse_tracking);
+    }
+
+    #[test]
+    fn click_is_press_then_release_when_tracked() {
+        let mut t = Terminal::new(10, 3);
+        t.resize(10, 3, 8, 16);
+        assert!(t.click(0, 0, MouseButton::Left).is_none());
+        t.write(b"\x1b[?1000h\x1b[?1006h");
+        assert_eq!(t.click(2, 1, MouseButton::Left).unwrap(), b"\x1b[<0;3;2M\x1b[<0;3;2m");
+        assert_eq!(t.click(0, 0, MouseButton::Right).unwrap(), b"\x1b[<2;1;1M\x1b[<2;1;1m");
     }
 
     #[test]

@@ -22,7 +22,7 @@ use rexc_proto::control::ClientInfo;
 use serde_json::{Value, json};
 
 pub use rexc_proto::model::{ProgramState, ProgramStatus};
-pub use rexc_term::{Cursor, CursorStyle, Frame, Highlight, KeyMods, Match, Prediction, Rgb, Row, Run, Scrollbar, Terminal, Underline};
+pub use rexc_term::{Cursor, CursorStyle, Frame, Highlight, KeyMods, Match, MouseButton, Prediction, Rgb, Row, Run, Scrollbar, Terminal, Underline};
 
 use host::{HostCmd, HostHandle};
 pub use model::{BlockState, HostState, HostStatus, InboxItem, SessionState, WindowState};
@@ -551,6 +551,14 @@ impl Engine {
             self.notifier.terminal(id);
         }
         Ok(())
+    }
+
+    /// A click at a cell for a program that tracks the mouse. False (nothing sent) when it doesn't.
+    pub fn terminal_click(&self, id: u64, col: u16, row: u16, right: bool) -> Result<bool> {
+        let t = self.terminal(id)?;
+        let button = if right { MouseButton::Right } else { MouseButton::Left };
+        let bytes = t.term.lock().click(col, row, button);
+        Ok(bytes.map(|b| t.write(b)).is_some())
     }
 
     pub fn terminal_scroll_to_bottom(&self, id: u64) -> Result<()> {

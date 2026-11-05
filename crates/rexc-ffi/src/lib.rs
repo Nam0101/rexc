@@ -797,6 +797,10 @@ impl Rexc {
     pub fn terminal_scroll(&self, terminal_id: u64, delta_rows: i32, col: u16, row: u16) -> Result<()> {
         Ok(self.engine.terminal_scroll(terminal_id, delta_rows, col, row)?)
     }
+    /// Click for a mouse-tracking program; false when the terminal isn't tracking the mouse.
+    pub fn terminal_click(&self, terminal_id: u64, col: u16, row: u16, right: bool) -> Result<bool> {
+        Ok(self.engine.terminal_click(terminal_id, col, row, right)?)
+    }
     pub fn terminal_scroll_to_bottom(&self, terminal_id: u64) -> Result<()> {
         Ok(self.engine.terminal_scroll_to_bottom(terminal_id)?)
     }

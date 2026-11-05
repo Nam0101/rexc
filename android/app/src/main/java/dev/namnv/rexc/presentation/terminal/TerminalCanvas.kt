@@ -39,6 +39,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -268,6 +269,36 @@ private class CanvasState(val renderer: FrameRenderer, val mirror: Boolean, priv
   }
 }
 
+private fun CanvasState.startSelection(pos: Offset, controller: TerminalController, haptics: HapticFeedback) {
+  val (c, r) = cellAt(pos)
+  if (controller.selectWord(c, r)) {
+    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+    selectionAnchor = c to r
+    toolbar = false
+  }
+}
+
+/** A tap: dismiss the toolbar, else open a link, else click for a mouse-tracking program, else toggle the keyboard. */
+private fun CanvasState.handleTap(
+  pos: Offset,
+  controller: TerminalController,
+  onLink: (String) -> Unit,
+  onTap: () -> Unit,
+) {
+  if (toolbar) {
+    controller.clearSelection()
+    toolbar = false
+    return
+  }
+  val (c, r) = cellAt(pos)
+  val link = controller.linkAt(c, r)
+  when {
+    link != null -> onLink(link)
+    frame?.mouseTracking == true -> controller.click(c, r, right = false)
+    else -> onTap()
+  }
+}
+
 /** Tap opens a link or focuses input, double tap selects a word, long press then drag extends a selection. */
 @Composable
 private fun Modifier.selectionGestures(
@@ -277,19 +308,12 @@ private fun Modifier.selectionGestures(
   onTap: () -> Unit,
 ): Modifier {
   val haptics = LocalHapticFeedback.current
+  var pressAt by remember(state) { mutableStateOf(Offset.Zero) }
+  var dragged by remember(state) { mutableStateOf(false) }
   return this
     .pointerInput(state) {
       detectTapGestures(
-        onTap = { pos ->
-          if (state.toolbar) {
-            controller.clearSelection()
-            state.toolbar = false
-          } else {
-            val (c, r) = state.cellAt(pos)
-            val link = controller.linkAt(c, r)
-            if (link != null) onLink(link) else onTap()
-          }
-        },
+        onTap = { pos -> state.handleTap(pos, controller, onLink, onTap) },
         onDoubleTap = { pos ->
           val (c, r) = state.cellAt(pos)
           if (controller.selectWord(c, r)) {
@@ -303,20 +327,30 @@ private fun Modifier.selectionGestures(
     .pointerInput(state) {
       detectDragGesturesAfterLongPress(
         onDragStart = { pos ->
-          val (c, r) = state.cellAt(pos)
-          if (controller.selectWord(c, r)) {
-            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-            state.selectionAnchor = c to r
-            state.toolbar = false
-          }
+          pressAt = pos
+          dragged = false
+          state.selectionAnchor = null
+          if (state.frame?.mouseTracking != true) state.startSelection(pos, controller, haptics)
         },
         onDrag = { change, _ ->
+          if (!dragged) {
+            dragged = true
+            if (state.selectionAnchor == null) state.startSelection(pressAt, controller, haptics)
+          }
           state.selectionAnchor?.let { (ac, ar) ->
             val (c, r) = state.cellAt(change.position)
             controller.select(ac, ar, c, r)
           }
         },
-        onDragEnd = { if (state.selectionAnchor != null) state.toolbar = true },
+        onDragEnd = {
+          if (!dragged && state.frame?.mouseTracking == true) {
+            val (c, r) = state.cellAt(pressAt)
+            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+            controller.click(c, r, right = true)
+          } else if (state.selectionAnchor != null) {
+            state.toolbar = true
+          }
+        },
         onDragCancel = { if (state.selectionAnchor != null) state.toolbar = true },
       )
     }

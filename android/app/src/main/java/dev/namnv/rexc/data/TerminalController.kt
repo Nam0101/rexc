@@ -40,6 +40,10 @@ class TerminalController(private val engine: Rexc, val id: ULong) {
     guard { engine.terminalScroll(id, deltaRows, col.toUShort(), row.toUShort()) }
   }
 
+  /** A click at a cell for a mouse-tracking program; false when nothing was sent. */
+  fun click(col: Int, row: Int, right: Boolean): Boolean =
+    guard { engine.terminalClick(id, col.toUShort(), row.toUShort(), right) } ?: false
+
   fun scrollToBottom() {
     guard { engine.terminalScrollToBottom(id) }
   }
