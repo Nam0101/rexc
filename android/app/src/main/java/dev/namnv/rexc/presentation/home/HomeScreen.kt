@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyItemScope
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -116,6 +117,7 @@ fun HomeScreen(
         verticalArrangement = Arrangement.spacedBy(Space.m),
       ) {
         item(key = "header") { Header(onAdd = { onEvent(HomeUiEvent.AddHostClicked) }, onOpenSettings) }
+        batteryItem(state.batteryHint, onEvent)
         if (state.inbox.isNotEmpty()) {
           item(key = "inbox-title") { SectionTitle("Inbox") }
           items(state.inbox, key = { "${it.hostId}/${it.blockId}" }) { item -> InboxCard(item, onEvent) }
@@ -133,6 +135,18 @@ fun HomeScreen(
   }
   state.editor?.let { editor -> HostEditorSheet(editor, onEvent) }
   SessionDialogs(dialog, onDismiss = { dialog = null }, onEvent = onEvent)
+}
+
+/** The battery-optimisation nudge, only while background alerts could still be frozen. */
+private fun LazyListScope.batteryItem(visible: Boolean, onEvent: (HomeUiEvent) -> Unit) {
+  if (!visible) return
+  item(key = "battery") {
+    BatteryHint(
+      visible = true,
+      onAllow = { onEvent(HomeUiEvent.AllowBattery) },
+      onDismiss = { onEvent(HomeUiEvent.DismissBatteryHint) },
+    )
+  }
 }
 
 @Composable

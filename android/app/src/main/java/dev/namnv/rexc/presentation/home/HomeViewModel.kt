@@ -37,6 +37,8 @@ class HomeViewModel @Inject constructor(private val repo: EngineRepository) :
     val collapsed: Set<String> = emptySet(),
     /** Block ids with a quick reply in flight. */
     val sending: Set<String> = emptySet(),
+    /** The battery hint was waved away this session. */
+    val batteryHintDismissed: Boolean = false,
   )
 
   private data class Preview(val stamp: String, val text: String?)
@@ -48,7 +50,13 @@ class HomeViewModel @Inject constructor(private val repo: EngineRepository) :
   private val effects = EventChannel<HomeEffect>("HomeEffect")
   override val eventFlow: Flow<HomeEffect> = effects.eventFlow
 
-  val uiState: StateFlow<HomeUiState> = combine(repo.hosts, repo.inbox, local, previews) { hosts, inbox, l, p ->
+  val uiState: StateFlow<HomeUiState> = combine(
+    repo.hosts,
+    repo.inbox,
+    local,
+    previews,
+    repo.needsBatteryExemption,
+  ) { hosts, inbox, l, p, battery ->
     HomeUiState(
       hosts = hosts.map { it.toUi(collapsed = it.hostId in l.collapsed) }.toImmutableList(),
       inbox = inbox.map {
@@ -57,6 +65,7 @@ class HomeViewModel @Inject constructor(private val repo: EngineRepository) :
       editor = l.editor,
       busyHostId = l.busyHostId,
       refreshing = l.refreshing,
+      batteryHint = battery && !l.batteryHintDismissed,
     )
   }.stateIn(viewModelScope, WHILE_UI_SUBSCRIBED, HomeUiState())
 
@@ -95,8 +104,8 @@ class HomeViewModel @Inject constructor(private val repo: EngineRepository) :
   fun onEvent(event: HomeUiEvent) {
     when (event) {
       HomeUiEvent.AddHostClicked, is HomeUiEvent.EditHostClicked, is HomeUiEvent.EditorChanged,
-      HomeUiEvent.SaveHost, HomeUiEvent.DismissEditor,
-      -> onEditorEvent(event)
+      HomeUiEvent.SaveHost, HomeUiEvent.DismissEditor, HomeUiEvent.AllowBattery, HomeUiEvent.DismissBatteryHint,
+      -> onSecondaryEvent(event)
       is HomeUiEvent.RemoveHost -> run { repo.call { removeHost(event.hostId) } }
       is HomeUiEvent.Connect -> run { repo.call { connect(event.hostId) } }
       is HomeUiEvent.Disconnect -> run { repo.call { disconnect(event.hostId) } }
@@ -114,8 +123,11 @@ class HomeViewModel @Inject constructor(private val repo: EngineRepository) :
     }
   }
 
-  private fun onEditorEvent(event: HomeUiEvent) {
+  /** The host editor sheet and the battery hint: small flows off the main list. */
+  private fun onSecondaryEvent(event: HomeUiEvent) {
     when (event) {
+      HomeUiEvent.AllowBattery -> effects.trySend(HomeEffect.RequestBatteryExemption)
+      HomeUiEvent.DismissBatteryHint -> local.update { it.copy(batteryHintDismissed = true) }
       HomeUiEvent.AddHostClicked -> local.update { it.copy(editor = HostEditor(null, "", "")) }
       is HomeUiEvent.EditHostClicked -> viewModelScope.launch {
         val record = repo.call { hosts().firstOrNull { it.hostId == event.hostId } } ?: return@launch

@@ -22,6 +22,8 @@ data class HomeUiState(
   val busyHostId: String? = null,
   /** Pull-to-refresh is reconnecting every host. */
   val refreshing: Boolean = false,
+  /** Background alerts are on but Android may still freeze the app: offer the battery exemption. */
+  val batteryHint: Boolean = false,
 )
 
 @Immutable
@@ -104,11 +106,16 @@ sealed interface HomeUiEvent {
   data object Refresh : HomeUiEvent
   data class CloseSession(val hostId: String, val sessionId: String) : HomeUiEvent
   data class RenameSession(val hostId: String, val sessionId: String, val label: String) : HomeUiEvent
+
+  /** Open the system's battery-optimisation prompt for the app. */
+  data object AllowBattery : HomeUiEvent
+  data object DismissBatteryHint : HomeUiEvent
 }
 
 sealed interface HomeEffect {
   data class OpenTerminal(val target: Terminal) : HomeEffect
   data class Message(val text: String) : HomeEffect
+  data object RequestBatteryExemption : HomeEffect
 }
 
 private val urgency =
