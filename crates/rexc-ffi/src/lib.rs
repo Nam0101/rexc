@@ -448,7 +448,8 @@ pub struct Run {
     pub col: u16,
     pub cells: u16,
     pub text: String,
-    /// Cell width of each grapheme in `text` (1 or 2).
+    /// Cell width of each grapheme in `text` (1 or 2). Empty when every grapheme is one cell
+    /// and one UTF-16 unit, which is nearly always: then `text.length == cells`.
     pub widths: Vec<u8>,
     /// 0xAARRGGBB
     pub fg: u32,
@@ -460,8 +461,26 @@ pub struct Run {
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct Line {
     pub runs: Vec<Run>,
-    /// False when this row is pixel-identical to the previous frame's row.
+    /// False when this row is unchanged since the `since` revision of `terminal_frame_since`:
+    /// `runs` is then empty and the caller keeps the runs it has. Always true in a full frame.
     pub dirty: bool,
+}
+
+/// Typed text the server hasn't echoed yet (local echo), drawn dimmed from a viewport cell.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct Prediction {
+    pub col: u16,
+    pub row: u16,
+    pub text: String,
+}
+
+/// A search match on a visible row, in viewport cells.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct Highlight {
+    pub col: u16,
+    pub row: u16,
+    pub len: u16,
+    pub current: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -499,6 +518,10 @@ pub struct Frame {
     pub dark: bool,
     /// False when nothing changed since the last frame (skip the draw).
     pub changed: bool,
+    /// Revision of this frame: pass it to `terminal_frame_since` for only the rows changed after it.
+    pub rev: u64,
+    pub prediction: Option<Prediction>,
+    pub highlights: Vec<Highlight>,
 }
 
 impl From<core::Frame> for Frame {
@@ -531,6 +554,7 @@ impl From<core::Frame> for Frame {
                     runs: row
                         .runs
                         .into_iter()
+                        .filter(|r| !is_invisible(r))
                         .map(|r| {
                             let mut style = 0u16;
                             if r.bold {
@@ -563,7 +587,7 @@ impl From<core::Frame> for Frame {
                                 core::Underline::Dashed => 5,
                             };
                             style |= ul << STYLE_UNDERLINE_SHIFT;
-                            Run { col: r.col, cells: r.cells, text: r.text, widths: r.widths, fg: r.fg.argb(), bg: r.bg.map(|c| c.argb()), underline_color: r.underline_color.map(|c| c.argb()), style }
+                            Run { col: r.col, cells: r.cells, widths: elide_widths(&r.text, r.widths), text: r.text, fg: r.fg.argb(), bg: r.bg.map(|c| c.argb()), underline_color: r.underline_color.map(|c| c.argb()), style }
                         })
                         .collect(),
                 })
@@ -575,8 +599,28 @@ impl From<core::Frame> for Frame {
             mouse_tracking: f.mouse_tracking,
             dark,
             changed: f.changed,
+            rev: f.rev,
+            prediction: f.prediction.map(|p| Prediction { col: p.col, row: p.row, text: p.text }),
+            highlights: f.highlights.into_iter().map(|h| Highlight { col: h.col, row: h.row, len: h.len, current: h.current }).collect(),
         }
     }
+}
+
+/// Blank cells in the default style paint nothing, so they needn't cross the FFI.
+fn is_invisible(r: &core::Run) -> bool {
+    r.bg.is_none()
+        && !r.selected
+        && r.underline == core::Underline::None
+        && !r.strikethrough
+        && !r.overline
+        && r.text.bytes().all(|b| b == b' ')
+}
+
+/// `widths` only when it says something: a wide grapheme, a combining sequence, or a
+/// character outside the BMP.
+fn elide_widths(text: &str, widths: Vec<u8>) -> Vec<u8> {
+    let plain = widths.len() == text.chars().count() && widths.iter().all(|&w| w == 1) && text.chars().all(|c| c.len_utf16() == 1);
+    if plain { Vec::new() } else { widths }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, uniffi::Record)]
@@ -714,6 +758,23 @@ impl Rexc {
     pub fn terminal_frame(&self, terminal_id: u64) -> Result<Frame> {
         Ok(self.engine.terminal_frame(terminal_id)?.into())
     }
+    pub fn terminal_frame_since(&self, terminal_id: u64, since: u64) -> Result<Frame> {
+        Ok(self.engine.terminal_frame_since(terminal_id, since)?.into())
+    }
+    pub fn terminal_set_local_echo(&self, terminal_id: u64, on: bool) -> Result<()> {
+        Ok(self.engine.terminal_set_local_echo(terminal_id, on)?)
+    }
+    /// Returns the number of matches; the match nearest the bottom becomes current and is scrolled into view.
+    pub fn terminal_search(&self, terminal_id: u64, query: String) -> Result<u32> {
+        Ok(self.engine.terminal_search(terminal_id, &query)?)
+    }
+    /// Move the current match by `delta` (positive goes down, wraps). Returns its index.
+    pub fn terminal_search_next(&self, terminal_id: u64, delta: i32) -> Result<Option<u32>> {
+        Ok(self.engine.terminal_search_next(terminal_id, delta)?)
+    }
+    pub fn terminal_search_clear(&self, terminal_id: u64) -> Result<()> {
+        Ok(self.engine.terminal_search_clear(terminal_id)?)
+    }
     pub fn terminal_set_viewport(&self, terminal_id: u64, cols: u16, rows: u16, cell_w: u32, cell_h: u32) -> Result<()> {
         Ok(self.engine.terminal_set_viewport(terminal_id, cols, rows, cell_w, cell_h)?)
     }
@@ -782,4 +843,38 @@ fn init_logging() {
             let _ = tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::from_default_env()).try_init();
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame_of(bytes: &[u8]) -> Frame {
+        let mut t = core::Terminal::new(20, 3);
+        t.write(bytes);
+        t.frame().into()
+    }
+
+    #[test]
+    fn plain_text_crosses_without_widths_and_blank_tails() {
+        let f = frame_of(b"plain \x1b[31mred\x1b[0m");
+        let runs = &f.lines[0].runs;
+        assert_eq!(runs.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(), ["plain ", "red"], "the blank tail is dropped");
+        assert!(runs.iter().all(|r| r.widths.is_empty()));
+        assert!(f.lines[1].runs.is_empty(), "an empty row has nothing to paint");
+    }
+
+    #[test]
+    fn widths_stay_for_wide_combining_and_astral_text() {
+        let f = frame_of("你好 e\u{301} 𝐀".as_bytes());
+        let run = &f.lines[0].runs[0];
+        assert_eq!(run.widths[..2], [2, 2]);
+        assert_eq!(run.widths.len(), run.text.chars().count() - 1, "one entry per grapheme");
+    }
+
+    #[test]
+    fn blank_cells_with_a_background_or_underline_are_kept() {
+        let f = frame_of(b"\x1b[44m   \x1b[0m\x1b[4m  ");
+        assert_eq!(f.lines[0].runs.len(), 2);
+    }
 }

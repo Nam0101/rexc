@@ -22,7 +22,7 @@ use rexc_proto::control::ClientInfo;
 use serde_json::{Value, json};
 
 pub use rexc_proto::model::{ProgramState, ProgramStatus};
-pub use rexc_term::{Cursor, CursorStyle, Frame, KeyMods, Rgb, Row, Run, Scrollbar, Underline};
+pub use rexc_term::{Cursor, CursorStyle, Frame, Highlight, KeyMods, Match, Prediction, Rgb, Row, Run, Scrollbar, Terminal, Underline};
 
 use host::{HostCmd, HostHandle};
 pub use model::{BlockState, HostState, HostStatus, InboxItem, SessionState, WindowState};
@@ -417,6 +417,12 @@ impl Engine {
         Ok(self.terminal(id)?.term.lock().frame())
     }
 
+    /// The frame with only the rows that changed after revision `since` (a previous
+    /// frame's `rev`; 0 for all of them). The rest come back empty and not `dirty`.
+    pub fn terminal_frame_since(&self, id: u64, since: u64) -> Result<Frame> {
+        Ok(self.terminal(id)?.term.lock().frame_since(since))
+    }
+
     /// The phone's size for this pane. Applied on the server when we own it.
     pub fn terminal_set_viewport(&self, id: u64, cols: u16, rows: u16, cell_w: u32, cell_h: u32) -> Result<()> {
         self.terminal(id)?.send(TermCmd::SetViewport(Viewport { cols: cols.max(2), rows: rows.max(1), cell_w, cell_h }));
@@ -437,7 +443,8 @@ impl Engine {
         let t = self.terminal(id)?;
         let mut bytes = Vec::with_capacity(text.len());
         {
-            let term = t.term.lock();
+            let mut term = t.term.lock();
+            let predicted = term.local_echo_typed(text);
             for ch in text.chars() {
                 match ch {
                     '\n' | '\r' => bytes.extend(term.encode_key("enter", KeyMods::default(), "", None).unwrap_or_else(|| b"\r".to_vec())),
@@ -449,16 +456,51 @@ impl Engine {
                     }
                 }
             }
+            drop(term);
+            if predicted {
+                self.refresh_prediction(id);
+            }
         }
         t.write(bytes);
         Ok(())
+    }
+
+    /// Local echo on or off for this terminal (slow links; a prediction only ever shows
+    /// after the server has stayed silent for a moment).
+    pub fn terminal_set_local_echo(&self, id: u64, on: bool) -> Result<()> {
+        self.terminal(id)?.term.lock().set_local_echo(on);
+        Ok(())
+    }
+
+    /// Wake the UI when a fresh prediction is due to show, and again when it would be dropped.
+    fn refresh_prediction(&self, id: u64) {
+        let notifier = self.notifier.clone();
+        self.runtime.handle().spawn(async move {
+            tokio::time::sleep(rexc_term::predict::SHOW_AFTER + Duration::from_millis(4)).await;
+            notifier.terminal(id);
+            tokio::time::sleep(rexc_term::predict::GIVE_UP_AFTER).await;
+            notifier.terminal(id);
+        });
     }
 
     /// A named key (`arrow_up`, `key_c`, `enter`...) with modifiers.
     pub fn terminal_send_key(&self, id: u64, key: &str, mods: KeyMods) -> Result<bool> {
         let t = self.terminal(id)?;
         let (text, codepoint) = key_text(key, mods);
-        let bytes = t.term.lock().encode_key(key, mods, &text, codepoint);
+        let (bytes, predicted) = {
+            let mut term = t.term.lock();
+            let bytes = term.encode_key(key, mods, &text, codepoint);
+            // Only a plain typed character is guessed; Enter, Backspace, arrows, Ctrl-C... reset.
+            let plain = bytes.is_some() && !(mods.ctrl || mods.alt || mods.meta) && !text.is_empty();
+            let predicted = plain && term.local_echo_typed(&text);
+            if !plain {
+                term.local_echo_reset();
+            }
+            (bytes, predicted)
+        };
+        if predicted {
+            self.refresh_prediction(id);
+        }
         match bytes {
             Some(b) => {
                 t.write(b);
@@ -470,7 +512,11 @@ impl Engine {
 
     pub fn terminal_paste(&self, id: u64, text: &str) -> Result<()> {
         let t = self.terminal(id)?;
-        let bytes = t.term.lock().encode_paste(text);
+        let bytes = {
+            let mut term = t.term.lock();
+            term.local_echo_reset();
+            term.encode_paste(text)
+        };
         t.write(bytes);
         Ok(())
     }
@@ -554,13 +600,35 @@ impl Engine {
     /// A link under a cell: an OSC 8 hyperlink, else a URL printed in the row.
     pub fn terminal_link_at(&self, id: u64, col: u16, row: u16) -> Result<Option<String>> {
         let t = self.terminal(id)?;
-        let mut term = t.term.lock();
+        let term = t.term.lock();
         if let Some(u) = term.hyperlink_at(col, row) {
             return Ok(Some(u));
         }
-        let frame = term.frame();
-        let Some(line) = frame.lines.get(row as usize) else { return Ok(None) };
-        Ok(url_at(&line.text(), col as usize))
+        Ok(url_at(&term.row_text(row), col as usize))
+    }
+
+    // ----- search in the scrollback -----
+
+    /// Search the terminal's text, smart-case (a capital letter makes it case-sensitive), and
+    /// show the match nearest the bottom. Returns how many there are. An empty query clears.
+    pub fn terminal_search(&self, id: u64, query: &str) -> Result<u32> {
+        let found = self.terminal(id)?.term.lock().search(query, query.chars().any(|c| c.is_ascii_uppercase()));
+        self.notifier.terminal(id);
+        Ok(found.len() as u32)
+    }
+
+    /// Make the match `delta` places on current (positive goes down, wrapping) and scroll it
+    /// into view. Returns its index among the matches, or `None` without matches.
+    pub fn terminal_search_next(&self, id: u64, delta: i32) -> Result<Option<u32>> {
+        let at = self.terminal(id)?.term.lock().search_step(delta as isize);
+        self.notifier.terminal(id);
+        Ok(at.map(|i| i as u32))
+    }
+
+    pub fn terminal_search_clear(&self, id: u64) -> Result<()> {
+        self.terminal(id)?.term.lock().search_clear();
+        self.notifier.terminal(id);
+        Ok(())
     }
 }
 
